@@ -1,0 +1,78 @@
+name: Build ISOs
+
+# Builds the native-qemu appliance ISO for x86_64 and aarch64 using Alpine's
+# own mkimage.sh tooling (fetched fresh from aports on each run) with our
+# custom profile from build/mkimg.native_qemu.sh + build/genapkovl-native-qemu.sh.
+#
+# aarch64 note: this builds on GitHub's native arm64 runner (ubuntu-24.04-arm),
+# not by cross-building on x86_64. GitHub-hosted arm64 runners are free for
+# public repositories; private repos need a plan that includes them. The
+# actual Alpine/mkimage.sh work runs inside a plain `docker run` step (build/
+# ci-build.sh), not GitHub's job-level `container:` — that feature can't run
+# JS actions (checkout, upload-artifact) on arm64 runners.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  ALPINE_VERSION: "3.20"
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }} ISO
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ISO in Alpine container
+        env:
+          MATRIX_ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p dist
+          docker run --rm \
+            -e ALPINE_VERSION -e MATRIX_ARCH -e GITHUB_REF_NAME \
+            -v "$PWD":/repo -w /repo \
+            "alpine:$ALPINE_VERSION" \
+            sh /repo/build/ci-build.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-qemu-${{ matrix.arch }}
+          path: dist/*.iso
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all ISO artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*/*.iso
+          generate_release_notes: true
+          # A release-candidate tag publishes the same verified ISO artifacts
+          # without implying that the physical-device checklist is complete.
+          prerelease: ${{ contains(github.ref_name, '-rc') }}

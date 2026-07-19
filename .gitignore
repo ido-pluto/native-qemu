@@ -1,0 +1,8 @@
+.DS_Store
+dist/
+*.iso
+*.img
+*.qcow2
+.DS_Store
+agent/target/
+overlay/usr/local/bin/native-qemu-agent

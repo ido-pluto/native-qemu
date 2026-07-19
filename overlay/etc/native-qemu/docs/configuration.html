@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>native-qemu configuration</title>
+</head>
+<body>
+  <h1>native-qemu configuration</h1>
+  <p>The active configuration is <code>/etc/native-qemu/config.toml</code>. After changing it on a
+  diskless appliance, run <code>lbu commit</code> before rebooting.</p>
+
+  <h2>Networking</h2>
+  <p><code>mode = "user"</code> requires no host networking setup. Bridge mode requires an existing
+  Linux bridge (normally <code>br0</code>), not a raw Ethernet interface. Macvtap uses
+  <code>bridge_iface</code> as its physical parent and gives the VM a direct attachment; it is not an
+  SSH management path from the host.</p>
+
+  <h2>Guest services</h2>
+  <p><code>[docs_server]</code> binds HTTP and DNS only to its bridge interface. Set
+  <code>dhcp_range</code> only when this appliance should provide DHCP on that isolated network.</p>
+  <p><code>[shared_folder]</code> starts virtiofsd for one host directory. For a Linux guest:</p>
+  <pre>mkdir -p /mnt/shared
+mount -t virtiofs native-qemu-share /mnt/shared</pre>
+  <p>For SMB, define one or more <code>[[smb_share]]</code> entries. A <code>vm_only</code> share is
+  served only on <code>[smb].vm_iface</code>; a <code>global</code> share is served only on
+  <code>[smb].lan_iface</code> and always requires its password file.</p>
+  <p>The x86 Windows XP VirtIO test profile is bundled at
+  <code>/etc/native-qemu/examples/winxp-virtio.toml</code>. It requires the guest's
+  <code>viostor</code> driver before it can boot from the configured VirtIO disk.</p>
+
+  <h2>Rescue</h2>
+  <p>Missing disks, required USB devices, or invalid host-service configuration open the rescue shell.
+  Correct the file, run <code>lbu commit</code> if the change should persist, then type
+  <code>exit</code> to retry the agent.</p>
+</body>
+</html>

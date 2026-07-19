@@ -1,0 +1,100 @@
+# native-qemu configuration.
+#
+# Copy this file to /etc/native-qemu/config.toml (native-qemu-agent does this
+# automatically on first boot if config.toml doesn't exist yet) and edit it.
+# After editing, run `lbu commit` so the change survives a reboot.
+#
+version = 1
+
+[vm]
+arch     = "x86_64"      # x86_64 | aarch64 — MUST match this machine's own architecture
+firmware = "bios"        # bios (default) | uefi (x86_64 uses bundled OVMF; aarch64 always uses AAVMF UEFI)
+memory   = "2G"
+vcpus    = 2
+cpu      = "host"
+
+[vm.disk]
+format  = "raw"        # raw | qcow2
+storage = 1               # 0 = boot USB, 1 = first internal disk, 2.. = external disks, in stable order
+path    = "vms/test.img" # path inside the resolved storage's mountpoint — must already exist
+bus     = "virtio"        # virtio | scsi | ide
+cache   = "none"
+discard = "unmap"
+
+[network]
+mode         = "user"     # user (default, no privileges needed) | bridge (needs bridge_iface)
+bridge_iface = "br0"      # existing Linux bridge (not a raw physical NIC)
+model        = "virtio-net-pci"
+
+[sound]
+enabled = false
+backend = "alsa"          # alsa | pipewire (starts PipeWire + pipewire-pulse)
+model   = "virtio-sound-pci"
+
+[display]
+backend = "sdl"           # sdl = direct physical KMS/DRM guest display | none = deliberately headless
+
+[usb]
+default = "passthrough"   # passthrough (default: pass through everything not excluded) | host-only
+exclude = []               # ["vendorid:productid", ...] — always kept on the host even under "passthrough"
+hotplug = false             # attach devices plugged in after the VM has already started (polls every ~2s)
+
+# [[usb.device]]           # optional: pin/require specific devices by ID
+# name       = "keyboard"
+# vendor_id  = "046d"
+# product_id = "c31c"
+# required   = true         # if true and missing at boot, see lifecycle.on_missing_resource
+
+[startup]
+# script     = "/etc/native-qemu/startup.sh"
+blocking   = true
+timeout    = "30s"
+on_failure = "continue"   # continue | abort_to_rescue
+
+[shutdown]
+# script  = "/etc/native-qemu/shutdown.sh"
+timeout = "15s"
+
+[lifecycle]
+on_guest_shutdown    = "poweroff_host"  # poweroff_host (default) | restart_vm | drop_to_shell
+on_guest_crash       = "drop_to_shell"  # drop_to_shell (default) | restart_vm | poweroff_host
+on_missing_resource  = "rescue_shell"   # rescue_shell (default) | boot_anyway — a required USB device is absent
+max_restart_attempts = 3
+
+[logging]
+enabled = true
+storage = 1                # which storage index to write logs to — must be writable, so NOT 0 (boot media is read-only)
+path    = "native-qemu/logs"
+
+[docs_server]
+enabled    = false
+domain     = "light-docs.local"
+port       = 80
+bind_iface = "br0"        # existing guest-facing bridge only; never bind docs to the LAN
+docs_dir   = "/etc/native-qemu/docs"
+# dhcp_range = "192.168.76.10,192.168.76.250,12h" # optional; omit to provide DNS only
+
+[shared_folder]
+enabled   = false
+storage   = 1
+host_path = "native-qemu/shared"
+guest_tag = "native-qemu-share" # guest: mount -t virtiofs native-qemu-share /mnt/shared
+
+# [[smb_share]]
+# name          = "guest-files"
+# enabled       = true
+# storage       = 1
+# host_path     = "native-qemu/shared"
+# share_name    = "native-qemu-files"
+# scope         = "vm_only"       # vm_only (guest bridge) | global (real LAN)
+# username      = "vmuser"
+# password_file = "/etc/native-qemu/smb-files.secret" # mode 0600, password only
+# read_only     = false
+
+[smb]
+vm_iface = "br0"
+# lan_iface = "eth0"              # required only for scope = "global"
+
+[system]
+# ssh_enabled        = true
+# ssh_authorized_key = "ssh-ed25519 AAAA..."

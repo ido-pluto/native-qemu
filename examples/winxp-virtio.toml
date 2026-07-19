@@ -1,0 +1,53 @@
+# Physical x86_64 test profile for WinXpAgent.qcow2.
+#
+# Place the image on the appliance's storage index 1 as:
+#   vms/WinXpAgent.qcow2
+# then copy this file to /etc/native-qemu/config.toml and run `lbu commit`.
+# Windows XP needs the Red Hat viostor driver preinstalled to boot from
+# bus = "virtio".
+version = 1
+
+[vm]
+arch = "x86_64"
+firmware = "bios"
+memory = "1024M"
+vcpus = 1
+cpu = "host"
+
+[vm.disk]
+format = "qcow2"
+storage = 1
+path = "vms/WinXpAgent.qcow2"
+bus = "virtio"
+cache = "none"
+discard = "unmap"
+
+[network]
+mode = "user"
+model = "virtio-net-pci"
+
+[display]
+backend = "sdl"
+
+[sound]
+enabled = false
+
+[usb]
+default = "passthrough"
+hotplug = true
+
+[lifecycle]
+on_guest_shutdown = "poweroff_host"
+on_guest_crash = "drop_to_shell"
+on_missing_resource = "rescue_shell"
+max_restart_attempts = 3
+
+[logging]
+enabled = true
+storage = 1
+path = "native-qemu/logs"
+max_size = "50M"
+rotate = 5
+
+[system]
+ssh_enabled = true

@@ -1,0 +1,7 @@
+#!/bin/sh
+# Copy to /etc/native-qemu/startup.sh (or point [startup].script elsewhere)
+# and set +x. Runs once before the VM launches — e.g. wait for a network
+# link, mount a network share, bring up a VPN. Non-zero exit is handled per
+# [startup].on_failure in config.toml.
+
+exit 0

@@ -1,0 +1,7 @@
+#!/bin/sh
+# Copy to /etc/native-qemu/shutdown.sh (or point [shutdown].script elsewhere)
+# and set +x. Runs once after the guest/qemu process exits, before the
+# lifecycle action (poweroff/restart/rescue shell) — e.g. unmount a network
+# share, tear down a VPN.
+
+exit 0

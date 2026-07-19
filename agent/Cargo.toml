@@ -1,0 +1,26 @@
+[package]
+name = "native-qemu-agent"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "native-qemu-agent"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+signal-hook = "0.3"
+libc = "0.2"
+
+# Alpine 3.20 ships rustc 1.78, which predates edition2024 (stabilized in
+# 1.85) — pin transitive deps that have started requiring it on newer
+# releases to versions still compatible with 1.78.
+indexmap = "=2.2.6"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"

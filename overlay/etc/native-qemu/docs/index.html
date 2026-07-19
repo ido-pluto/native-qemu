@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>native-qemu appliance</title>
+</head>
+<body>
+  <h1>native-qemu appliance</h1>
+  <p>This is the host documentation service. It is intentionally available only on the guest-facing bridge.</p>
+  <p><a href="configuration.html">Configuration and guest-service guide</a></p>
+
+  <h2>Host administration</h2>
+  <p>Use SSH to reach the host and inspect <code>/var/log/native-qemu.log</code>, edit
+  <code>/etc/native-qemu/config.toml</code>, then run <code>lbu commit</code> to persist changes.</p>
+
+  <h2>Shared folder</h2>
+  <p>When <code>[shared_folder]</code> is enabled, mount it in a Linux guest with:</p>
+  <pre>mount -t virtiofs native-qemu-share /mnt/shared</pre>
+  <p>Windows guests need the virtio-fs driver. An enabled SMB share is an alternative for guests
+  without that driver.</p>
+
+  <h2>Safety</h2>
+  <p>The guest disk image is not mounted by the host while QEMU is running. Move files through the
+  shared folder or configured SMB shares instead.</p>
+</body>
+</html>
