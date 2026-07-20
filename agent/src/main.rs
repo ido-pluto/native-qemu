@@ -18,6 +18,13 @@ use std::fs;
 
 const CONFIG_PATH: &str = "/etc/native-qemu/config.toml";
 const CONFIG_EXAMPLE_PATH: &str = "/etc/native-qemu/config.toml.example";
+const CONFIG_FILENAMES: [&str; 2] = ["config.toml", "CONFIG.TOML"];
+
+fn add_config_path_variants(paths: &mut VecDeque<PathBuf>, base: &Path) {
+    for name in CONFIG_FILENAMES {
+        paths.push_back(base.join(name));
+    }
+}
 
 enum VmResult {
     CleanShutdown,
@@ -35,16 +42,13 @@ fn ordered_config_paths() -> VecDeque<PathBuf> {
             let mountpoint = fields.next();
             if let Some(mountpoint) = mountpoint {
                 if mountpoint.starts_with("/media/") {
-                    let candidate = Path::new(mountpoint).join("config.toml");
-                    if candidate.exists() {
-                        paths.push_back(candidate);
-                    }
+                    add_config_path_variants(&mut paths, Path::new(mountpoint));
                 }
             }
         }
     }
 
-    paths.push_back(Path::new("/config.toml").to_path_buf());
+    add_config_path_variants(&mut paths, Path::new("/"));
     paths.push_back(Path::new(CONFIG_PATH).to_path_buf());
     paths.push_back(Path::new(CONFIG_EXAMPLE_PATH).to_path_buf());
     paths
@@ -62,7 +66,7 @@ fn load_config() -> Result<(PathBuf, config::Config), String> {
             }
         }
     }
-    Err("no valid config.toml found in fallback chain (media/config.toml, /config.toml, /etc/native-qemu/config.toml, /etc/native-qemu/config.toml.example)".into())
+    Err("no valid config.toml found in fallback chain (media/config.toml, media/CONFIG.TOML, /config.toml, /CONFIG.TOML, /etc/native-qemu/config.toml, /etc/native-qemu/config.toml.example)".into())
 }
 
 fn main() {

@@ -2,9 +2,11 @@
 #
 # On boot, native-qemu-agent tries, in order:
 #   1) /media/<boot-device>/config.toml (editable on writable boot media)
-#   2) /config.toml (image default)
-#   3) /etc/native-qemu/config.toml
-#   4) /etc/native-qemu/config.toml.example
+#   2) /media/<boot-device>/CONFIG.TOML (legacy filename variant)
+#   3) /config.toml (image default)
+#   4) /CONFIG.TOML (legacy filename variant)
+#   5) /etc/native-qemu/config.toml
+#   6) /etc/native-qemu/config.toml.example
 #
 # For persistent changes in the host filesystem, copy the active config to
 # /etc/native-qemu/config.toml and run `lbu commit`.

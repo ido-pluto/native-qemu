@@ -22,9 +22,12 @@ if [ -d "$OVERLAY_SRC" ]; then
 	cp -a "$OVERLAY_SRC"/. "$tmp"/
 fi
 
-# Place a direct root-level config.toml copy in the appliance image
-# so operators can edit this file on writable boot media before first run.
+# Place direct root-level config.toml copies in the appliance image so operators
+# can edit this file on writable boot media before first run.
+# A duplicate uppercase 8.3-style name is intentionally included because older
+# legacy media readers may fold filenames to case-insensitive/short-name style.
 cp "$OVERLAY_SRC/etc/native-qemu/config.toml.example" "$tmp/config.toml"
+cat "$tmp/config.toml" > "$tmp/CONFIG.TOML"
 
 # Keep the physical Windows XP VirtIO test profile available on the appliance
 # itself, not merely in the source checkout used to build the ISO.
@@ -116,4 +119,4 @@ for f in startup.sh.example shutdown.sh.example; do
 	[ ! -f "$tmp"/etc/native-qemu/"$f" ] || chmod +x "$tmp"/etc/native-qemu/"$f"
 done
 
-tar -c -C "$tmp" etc usr | gzip -9n > "$HOSTNAME.apkovl.tar.gz"
+tar -c -C "$tmp" etc usr config.toml CONFIG.TOML | gzip -9n > "$HOSTNAME.apkovl.tar.gz"

@@ -45,6 +45,14 @@ To build it yourself instead of downloading, push a tag (`git tag v0.1.0 && git 
 the "Build ISOs" workflow manually from the Actions tab — it uploads both ISOs as workflow artifacts
 even without a tag.
 
+For local builds with a visible loading spinner and progress output while the containerized
+mkimage flow runs, use:
+
+```sh
+./scripts/build-native-qemu-iso.sh x86_64 dist
+./scripts/build-native-qemu-iso.sh aarch64 dist
+```
+
 ## Writing the ISO to a USB stick
 
 These images are hybrid ISOs — the same file that boots as an optical image can be written directly
@@ -104,7 +112,8 @@ not the default ISO mode).
 ## Configuration
 
 On first boot the agent resolves configuration in this order:
-`/media/<boot-device>/config.toml`, `/config.toml`, `/etc/native-qemu/config.toml`,
+`/media/<boot-device>/config.toml`, `/media/<boot-device>/CONFIG.TOML`, `/config.toml`,
+`/CONFIG.TOML`, `/etc/native-qemu/config.toml`,
 then `/etc/native-qemu/config.toml.example`. Edit the selected file and, for host-side
 persistence, run `lbu commit` if it should survive reboot.
 

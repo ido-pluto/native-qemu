@@ -88,6 +88,8 @@ tar -tzf "$verify_dir/apkovl.tar.gz" > "$verify_dir/apkovl.contents"
 for required in \
 	usr/local/bin/native-qemu-agent \
 	etc/apk/world \
+	config.toml \
+	CONFIG.TOML \
 	etc/native-qemu/config.toml.example \
 	etc/native-qemu/startup.sh.example \
 	etc/native-qemu/shutdown.sh.example \
