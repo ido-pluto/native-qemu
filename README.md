@@ -103,10 +103,10 @@ not the default ISO mode).
 
 ## Configuration
 
-On first boot the agent copies `/etc/native-qemu/config.toml.example` to
-`/etc/native-qemu/config.toml`. Edit that file to select the host architecture, guest disk, storage
-index, networking, USB policy, lifecycle behavior, and optional hooks. The inline comments are the
-authoritative reference for the currently implemented fields.
+On first boot the agent resolves configuration in this order:
+`/media/<boot-device>/config.toml`, `/config.toml`, `/etc/native-qemu/config.toml`,
+then `/etc/native-qemu/config.toml.example`. Edit the selected file and, for host-side
+persistence, run `lbu commit` if it should survive reboot.
 
 For example, to use a guest image at `vms/main.qcow2` on the first internal disk, set:
 

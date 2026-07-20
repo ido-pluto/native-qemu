@@ -9,10 +9,12 @@ mod usb;
 
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
+use std::collections::VecDeque;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
+use std::fs;
 
 const CONFIG_PATH: &str = "/etc/native-qemu/config.toml";
 const CONFIG_EXAMPLE_PATH: &str = "/etc/native-qemu/config.toml.example";
@@ -22,19 +24,57 @@ enum VmResult {
     Crashed(String),
 }
 
-fn main() {
-    if !Path::new(CONFIG_PATH).exists() && Path::new(CONFIG_EXAMPLE_PATH).exists() {
-        let _ = std::fs::copy(CONFIG_EXAMPLE_PATH, CONFIG_PATH);
+fn ordered_config_paths() -> VecDeque<PathBuf> {
+    let mut paths = VecDeque::new();
+
+    let mounts = fs::read_to_string("/proc/mounts").ok();
+    if let Some(mounts) = mounts {
+        for line in mounts.lines() {
+            let mut fields = line.split_whitespace();
+            let _ = fields.next();
+            let mountpoint = fields.next();
+            if let Some(mountpoint) = mountpoint {
+                if mountpoint.starts_with("/media/") {
+                    let candidate = Path::new(mountpoint).join("config.toml");
+                    if candidate.exists() {
+                        paths.push_back(candidate);
+                    }
+                }
+            }
+        }
     }
 
-    let cfg = match config::load(Path::new(CONFIG_PATH)) {
-        Ok(c) => c,
+    paths.push_back(Path::new("/config.toml").to_path_buf());
+    paths.push_back(Path::new(CONFIG_PATH).to_path_buf());
+    paths.push_back(Path::new(CONFIG_EXAMPLE_PATH).to_path_buf());
+    paths
+}
+
+fn load_config() -> Result<(PathBuf, config::Config), String> {
+    for path in ordered_config_paths() {
+        match config::load(&path) {
+            Ok(cfg) => return Ok((path, cfg)),
+            Err(error) => {
+                eprintln!(
+                    "native-qemu: failed to load config from {}: {error}, trying next fallback path",
+                    path.display()
+                );
+            }
+        }
+    }
+    Err("no valid config.toml found in fallback chain (media/config.toml, /config.toml, /etc/native-qemu/config.toml, /etc/native-qemu/config.toml.example)".into())
+}
+
+fn main() {
+    let (config_path, cfg) = match load_config() {
+        Ok(pair) => pair,
         Err(e) => {
-            eprintln!("native-qemu: fatal: could not load {CONFIG_PATH}: {e}");
+            eprintln!("native-qemu: fatal: no valid config available: {e}");
             drop_to_shell(&format!("failed to load config: {e}"));
             return;
         }
     };
+    println!("native-qemu: loading config from {}", config_path.display());
 
     if cfg.version != 1 {
         drop_to_shell(&format!(

@@ -6,8 +6,10 @@
 </head>
 <body>
   <h1>native-qemu configuration</h1>
-  <p>The active configuration is <code>/etc/native-qemu/config.toml</code>. After changing it on a
-  diskless appliance, run <code>lbu commit</code> before rebooting.</p>
+  <p>The agent loads config in this order: <code>/media/&lt;boot-device&gt;/config.toml</code>,
+  <code>/config.toml</code>, <code>/etc/native-qemu/config.toml</code>, then
+  <code>/etc/native-qemu/config.toml.example</code>. After changing a file on
+  the appliance filesystem, run <code>lbu commit</code> before rebooting.</p>
 
   <h2>Networking</h2>
   <p><code>mode = "user"</code> requires no host networking setup. Bridge mode requires an existing
