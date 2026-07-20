@@ -59,7 +59,7 @@ cp "${PACKAGER_PRIVKEY}.pub" /etc/apk/keys/
 
 mkdir -p /repo/dist
 cd /tmp/aports/scripts
-./mkimage.sh \
+NATIVE_QEMU_ARCH="$MATRIX_ARCH" ./mkimage.sh \
 	--tag "${GITHUB_REF_NAME:-dev}" \
 	--outdir /repo/dist \
 	--arch "$MATRIX_ARCH" \
@@ -87,6 +87,7 @@ xorriso -osirrox on -indev "$iso" -extract "$apkovl_path" "$verify_dir/apkovl.ta
 tar -tzf "$verify_dir/apkovl.tar.gz" > "$verify_dir/apkovl.contents"
 for required in \
 	usr/local/bin/native-qemu-agent \
+	etc/apk/world \
 	etc/native-qemu/config.toml.example \
 	etc/native-qemu/startup.sh.example \
 	etc/native-qemu/shutdown.sh.example \
@@ -96,9 +97,18 @@ for required in \
 	echo "native-qemu: checking apkovl member $required"
 	grep -qx "$required" "$verify_dir/apkovl.contents"
 done
+tar -xOf "$verify_dir/apkovl.tar.gz" etc/apk/world > "$verify_dir/apkovl.world"
+grep -qx 'libgcc' "$verify_dir/apkovl.world"
+grep -qx "qemu-system-$MATRIX_ARCH" "$verify_dir/apkovl.world"
 case "$MATRIX_ARCH" in
-	x86_64) firmware_package='ovmf-*.apk' ;;
-	aarch64) firmware_package='aavmf-*.apk' ;;
+	x86_64)
+		firmware_package='ovmf-*.apk'
+		grep -qx 'ovmf' "$verify_dir/apkovl.world"
+		;;
+	aarch64)
+		firmware_package='aavmf-*.apk'
+		grep -qx 'aavmf' "$verify_dir/apkovl.world"
+		;;
 	*) exit 1 ;;
 esac
 echo "native-qemu: checking embedded firmware package $firmware_package"

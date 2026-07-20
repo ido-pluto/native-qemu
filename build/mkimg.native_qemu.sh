@@ -41,7 +41,10 @@ profile_native_qemu() {
 	# PipeWire when sound.backend = "pipewire".  virtiofsd, dnsmasq, Samba,
 	# and iproute2 power the optional shared-folder, docs, SMB, and macvtap
 	# services; all are inactive unless explicitly enabled in config.toml.
-	apks="$apks qemu-img qemu-hw-usb-host qemu-bridge-helper qemu-audio-alsa \
+	# The Rust launcher is dynamically linked by Alpine's packaged toolchain and
+	# needs libgcc_s at runtime. It is not otherwise guaranteed to be pulled in
+	# by the selected QEMU modules, so keep it explicit in the appliance root.
+	apks="$apks libgcc qemu-img qemu-hw-usb-host qemu-bridge-helper qemu-audio-alsa \
 		qemu-audio-pa qemu-ui-sdl pipewire pipewire-pulse virtiofsd dnsmasq samba iproute2"
 
 	# Broad out-of-the-box hardware support (touchscreens, SD/MMC readers,

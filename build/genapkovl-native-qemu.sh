@@ -32,6 +32,54 @@ fi
 mkdir -p "$tmp"/etc
 echo "$HOSTNAME" > "$tmp"/etc/hostname
 
+# `apks` in the mkimage profile builds the ISO's local boot repository, but
+# does not itself select packages for installation into the diskless root.
+# The apkovl's world file is that selection. Without it the launcher starts
+# but its QEMU/service dependencies are absent after the initramfs switch.
+case "${NATIVE_QEMU_ARCH:-$(uname -m)}" in
+	x86_64)
+		native_qemu_system_package="qemu-system-x86_64"
+		native_qemu_firmware_package="ovmf"
+		;;
+	aarch64)
+		native_qemu_system_package="qemu-system-aarch64"
+		native_qemu_firmware_package="aavmf"
+		;;
+	*)
+		echo "native-qemu: unsupported appliance architecture: ${NATIVE_QEMU_ARCH:-$(uname -m)}" >&2
+		exit 1
+		;;
+esac
+mkdir -p "$tmp"/etc/apk
+cat > "$tmp"/etc/apk/world <<EOF
+alpine-base
+busybox
+openrc
+doas
+e2fsprogs
+kbd-bkeymaps
+tzdata
+dropbear
+usbutils
+pciutils
+openssl
+libgcc
+$native_qemu_system_package
+$native_qemu_firmware_package
+qemu-img
+qemu-hw-usb-host
+qemu-bridge-helper
+qemu-audio-alsa
+qemu-audio-pa
+qemu-ui-sdl
+pipewire
+pipewire-pulse
+virtiofsd
+dnsmasq
+samba
+iproute2
+EOF
+
 # Tells mkinitfs's initramfs-init to add its standard default sysinit/boot/
 # shutdown services (mdev, hwdrivers, modloop, hostname, syslog, etc.) —
 # normally on by default, but suppressed whenever an apkovl is present unless
