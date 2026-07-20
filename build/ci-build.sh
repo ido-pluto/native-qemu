@@ -79,8 +79,16 @@ cp "${PACKAGER_PRIVKEY}.pub" /etc/apk/keys/
 
 mkdir -p /repo/dist
 cd /tmp/aports/scripts
+
+# Sanitize the image tag. On pull_request, GITHUB_REF_NAME is often "1/merge"
+# (slash creates a nested outdir that xorriso will not mkdir for us).
+IMAGE_TAG="${IMAGE_TAG:-${GITHUB_REF_NAME:-dev}}"
+IMAGE_TAG=$(printf '%s' "$IMAGE_TAG" | tr '/\\' '-' | tr -c 'A-Za-z0-9._-' '-' | sed 's/--*/-/g; s/^-//; s/-$//')
+[ -n "$IMAGE_TAG" ] || IMAGE_TAG=dev
+echo "native-qemu: mkimage tag=$IMAGE_TAG arch=$MATRIX_ARCH"
+
 NATIVE_QEMU_ARCH="$MATRIX_ARCH" ./mkimage.sh \
-	--tag "${GITHUB_REF_NAME:-dev}" \
+	--tag "$IMAGE_TAG" \
 	--outdir /repo/dist \
 	--arch "$MATRIX_ARCH" \
 	--hostkeys \
@@ -92,8 +100,20 @@ NATIVE_QEMU_ARCH="$MATRIX_ARCH" ./mkimage.sh \
 # embedded in the ISO. Inspect the produced artifact itself before CI uploads
 # it: the launcher, config, hooks, and guest docs must all be present, and
 # the selected architecture must carry the matching UEFI firmware package.
-iso="$(find /repo/dist -maxdepth 1 -type f -name '*.iso' -print | head -n 1)"
+iso="$(find /repo/dist -type f -name '*.iso' -print | head -n 1)"
 test -n "$iso"
+# Flatten to dist/*.iso so the workflow upload glob is simple.
+if [ "$(dirname "$iso")" != "/repo/dist" ]; then
+	flat="/repo/dist/$(basename "$iso")"
+	mv "$iso" "$flat"
+	iso=$flat
+	# drop empty nesting left behind
+	find /repo/dist -mindepth 1 -type d -empty -delete 2>/dev/null || true
+fi
+echo "native-qemu: ISO ready at $iso"
+# Stable name for packaging
+cp "$iso" "/repo/dist/native-qemu-${MATRIX_ARCH}.iso"
+iso="/repo/dist/native-qemu-${MATRIX_ARCH}.iso"
 
 # x86_64 only: unpack multi-part 7z guest image and inject as /images/image.qcow2
 # so flash tools can seed the ext4 data volume with a default ReactOS/Win98 disk.

@@ -96,10 +96,12 @@ jobs:
       - name: Build ISO in Alpine container
         env:
           MATRIX_ARCH: ${{ matrix.arch }}
+          # Prefer a slash-free tag (PR refs are "N/merge" which breaks outdirs).
+          IMAGE_TAG: ${{ github.event_name == 'pull_request' && format('pr{0}', github.event.pull_request.number) || github.ref_name }}
         run: |
           mkdir -p dist
           docker run --rm \
-            -e ALPINE_VERSION -e MATRIX_ARCH -e GITHUB_REF_NAME \
+            -e ALPINE_VERSION -e MATRIX_ARCH -e IMAGE_TAG -e GITHUB_REF_NAME \
             -v "$PWD":/repo -w /repo \
             "alpine:$ALPINE_VERSION" \
             sh /repo/build/ci-build.sh
@@ -108,7 +110,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: native-qemu-${{ matrix.arch }}
-          path: dist/*.iso
+          path: dist/native-qemu-${{ matrix.arch }}.iso
           if-no-files-found: error
 
   # Pair each host helper with the ISOs into a downloadable zip.

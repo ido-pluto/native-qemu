@@ -10,6 +10,11 @@ mod tools;
 mod ui;
 mod volume;
 
+// Provide missing lwext4 xattr symbols on MSVC (upstream incomplete build).
+#[cfg(windows)]
+#[allow(dead_code)]
+mod win_lwext4_stubs;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
