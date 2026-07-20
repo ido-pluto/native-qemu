@@ -2,6 +2,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Filesystem label of the writable ext4 USB data volume used for config and
+/// the default guest disk image.
+pub const DATA_VOLUME_LABEL: &str = "native-qemu";
+/// Where we mount the data volume when it is not already mounted elsewhere.
+pub const DATA_VOLUME_MOUNT: &str = "/mnt/native-qemu-data";
+/// Seed image path on boot media, relative to the media mountpoint.
+const SEED_DISK_REL: &str = "images/image.qcow2";
+
 /// Kernel block-device name prefixes that are never real storage (virtual
 /// devices, not disks a user could point vm.disk.storage at).
 const IGNORED_PREFIXES: &[&str] = &["loop", "ram", "zram", "dm-", "md"];
@@ -142,21 +150,186 @@ fn first_partition_or_self(disk: &str) -> String {
     disk.to_string()
 }
 
+/// Mountpoints currently under /media/* (boot ISO / Alpine media).
+pub fn media_mounts() -> Vec<PathBuf> {
+    let mounts = fs::read_to_string("/proc/mounts").unwrap_or_default();
+    let mut out = Vec::new();
+    for line in mounts.lines() {
+        let mut fields = line.split_whitespace();
+        let _device = fields.next();
+        if let Some(mp) = fields.next() {
+            if mp.starts_with("/media/") {
+                out.push(PathBuf::from(mp));
+            }
+        }
+    }
+    out
+}
+
+/// Resolves the block device for LABEL=native-qemu, if present.
+fn data_volume_device() -> Option<PathBuf> {
+    let by_label = Path::new("/dev/disk/by-label").join(DATA_VOLUME_LABEL);
+    if by_label.exists() {
+        return fs::canonicalize(&by_label)
+            .ok()
+            .or_else(|| Some(by_label));
+    }
+
+    // findfs is part of util-linux / busybox on Alpine.
+    if let Ok(output) = Command::new("findfs")
+        .arg(format!("LABEL={DATA_VOLUME_LABEL}"))
+        .output()
+    {
+        if output.status.success() {
+            let dev = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !dev.is_empty() {
+                return Some(PathBuf::from(dev));
+            }
+        }
+    }
+    None
+}
+
+fn devices_match(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => a.to_string_lossy() == b.to_string_lossy(),
+    }
+}
+
+/// Returns the mountpoint of `device` if it is already mounted.
+fn mountpoint_for_device(device: &Path) -> Option<PathBuf> {
+    let mounts = fs::read_to_string("/proc/mounts").ok()?;
+    for line in mounts.lines() {
+        let mut fields = line.split_whitespace();
+        let mounted_dev = fields.next()?;
+        let mp = fields.next()?;
+        if devices_match(Path::new(mounted_dev), device) {
+            return Some(PathBuf::from(mp));
+        }
+    }
+    None
+}
+
+fn is_mounted_at(mountpoint: &Path) -> bool {
+    let mounts = fs::read_to_string("/proc/mounts").unwrap_or_default();
+    let want = mountpoint.to_string_lossy();
+    mounts
+        .lines()
+        .any(|l| l.split_whitespace().nth(1) == Some(want.as_ref()))
+}
+
+/// Finds or mounts the ext4 data volume labeled `native-qemu`.
+///
+/// Preference order:
+/// 1. Already mounted at `/mnt/native-qemu-data`
+/// 2. Device for LABEL=native-qemu already mounted elsewhere
+/// 3. Mount LABEL=native-qemu (ext4) at `/mnt/native-qemu-data`
+pub fn ensure_data_volume() -> Option<PathBuf> {
+    let mountpoint = PathBuf::from(DATA_VOLUME_MOUNT);
+    if is_mounted_at(&mountpoint) {
+        return Some(mountpoint);
+    }
+
+    let device = data_volume_device()?;
+    if let Some(existing) = mountpoint_for_device(&device) {
+        return Some(existing);
+    }
+
+    if let Err(e) = fs::create_dir_all(&mountpoint) {
+        eprintln!(
+            "native-qemu: warning: could not create {}: {e}",
+            mountpoint.display()
+        );
+        return None;
+    }
+
+    // Prefer LABEL= so the call works even when we only know the label.
+    let label_spec = format!("LABEL={DATA_VOLUME_LABEL}");
+    let status = Command::new("mount")
+        .args(["-t", "ext4", &label_spec])
+        .arg(&mountpoint)
+        .status();
+    match status {
+        Ok(s) if s.success() => {
+            println!(
+                "native-qemu: mounted data volume {label_spec} at {}",
+                mountpoint.display()
+            );
+            return Some(mountpoint);
+        }
+        Ok(s) => {
+            // Fall back to the resolved device path.
+            let status2 = Command::new("mount")
+                .args(["-t", "ext4"])
+                .arg(&device)
+                .arg(&mountpoint)
+                .status();
+            match status2 {
+                Ok(s2) if s2.success() => {
+                    println!(
+                        "native-qemu: mounted data volume {} at {}",
+                        device.display(),
+                        mountpoint.display()
+                    );
+                    return Some(mountpoint);
+                }
+                Ok(s2) => eprintln!(
+                    "native-qemu: warning: could not mount data volume {} (LABEL exit {s}, device exit {s2})",
+                    device.display()
+                ),
+                Err(e) => eprintln!(
+                    "native-qemu: warning: mount {} failed: {e}",
+                    device.display()
+                ),
+            }
+        }
+        Err(e) => eprintln!("native-qemu: warning: mount {label_spec} failed: {e}"),
+    }
+    None
+}
+
+/// If `dest` is missing, copy the seed disk from boot media
+/// (`images/image.qcow2`) onto it once. Returns true when a copy was made.
+pub fn seed_disk_from_boot_media(dest: &Path) -> std::io::Result<bool> {
+    if dest.exists() {
+        return Ok(false);
+    }
+    for media in media_mounts() {
+        let seed = media.join(SEED_DISK_REL);
+        if !seed.is_file() {
+            continue;
+        }
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        println!(
+            "native-qemu: seeding disk {} from {}",
+            dest.display(),
+            seed.display()
+        );
+        fs::copy(&seed, dest)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 /// Resolves a config `storage` index to a real, mounted directory:
-/// 0 = boot media (already mounted by the initramfs under /media/*),
+/// 0 = data volume labeled `native-qemu` when present, else boot media under
+///     /media/* (already mounted by the initramfs),
 /// 1 = first internal disk, 2.. = external disks in stable order.
 /// Internal/external disks get mounted on demand under /mnt/native-qemu/.
 pub fn resolve(index: u32) -> Result<PathBuf, StorageError> {
     if index == 0 {
-        let mounts = fs::read_to_string("/proc/mounts").unwrap_or_default();
-        for line in mounts.lines() {
-            let mut fields = line.split_whitespace();
-            let _device = fields.next();
-            if let Some(mp) = fields.next() {
-                if mp.starts_with("/media/") {
-                    return Ok(PathBuf::from(mp));
-                }
-            }
+        // Prefer the writable ext4 data volume over read-only ISO boot media.
+        if let Some(data) = ensure_data_volume() {
+            return Ok(data);
+        }
+        if let Some(media) = media_mounts().into_iter().next() {
+            return Ok(media);
         }
         return Err(StorageError::NotFound(0));
     }
@@ -173,11 +346,7 @@ pub fn resolve(index: u32) -> Result<PathBuf, StorageError> {
     let mountpoint = PathBuf::from(format!("/mnt/native-qemu/storage{index}"));
 
     // already mounted?
-    let mounts = fs::read_to_string("/proc/mounts").unwrap_or_default();
-    let already = mounts
-        .lines()
-        .any(|l| l.split_whitespace().nth(1) == Some(mountpoint.to_str().unwrap_or("")));
-    if already {
+    if is_mounted_at(&mountpoint) {
         return Ok(mountpoint);
     }
 

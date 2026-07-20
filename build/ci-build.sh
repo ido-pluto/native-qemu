@@ -74,6 +74,24 @@ NATIVE_QEMU_ARCH="$MATRIX_ARCH" ./mkimage.sh \
 # the selected architecture must carry the matching UEFI firmware package.
 iso="$(find /repo/dist -maxdepth 1 -type f -name '*.iso' -print | head -n 1)"
 test -n "$iso"
+
+# x86_64 only: unpack multi-part 7z guest image and inject as /images/image.qcow2
+# so flash tools can seed the ext4 data volume with a default ReactOS/Win98 disk.
+if [ "$MATRIX_ARCH" = "x86_64" ] && [ -f /repo/assets/image/image.7z.001 ]; then
+	echo "native-qemu: injecting default images/image.qcow2 into ISO"
+	apk add --no-cache p7zip >/dev/null
+	img_tmp="$(mktemp -d)"
+	7z x /repo/assets/image/image.7z.001 -o"$img_tmp" -y >/dev/null
+	# Accept either image.qcow2 or nested path
+	img_file="$(find "$img_tmp" -type f -name 'image.qcow2' | head -n 1)"
+	test -n "$img_file"
+	xorriso -dev "$iso" -boot_image any keep \
+		-map "$img_file" /images/image.qcow2 \
+		-chmod 0444 /images/image.qcow2 -- \
+		>/dev/null
+	rm -rf "$img_tmp"
+fi
+
 echo "native-qemu: inspecting ISO artifact $iso"
 verify_dir="$(mktemp -d)"
 cleanup_verify() { rm -rf "$verify_dir"; }
@@ -117,3 +135,7 @@ echo "native-qemu: checking embedded firmware package $firmware_package"
 # Alpine's xorriso uses its own `-find` action syntax; `-exec echo` emits
 # every matching ISO pathname, whereas GNU find's `-print` is not valid.
 xorriso -indev "$iso" -find / -type f -name "$firmware_package" -exec echo 2>/dev/null | grep -q .
+if [ "$MATRIX_ARCH" = "x86_64" ] && [ -f /repo/assets/image/image.7z.001 ]; then
+	echo "native-qemu: checking ISO embeds images/image.qcow2"
+	xorriso -indev "$iso" -find /images -type f -name 'image.qcow2' -exec echo 2>/dev/null | grep -q .
+fi

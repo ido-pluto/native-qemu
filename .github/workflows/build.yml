@@ -1,15 +1,8 @@
 name: Build ISOs
 
 # Builds the native-qemu appliance ISO for x86_64 and aarch64 using Alpine's
-# own mkimage.sh tooling (fetched fresh from aports on each run) with our
-# custom profile from build/mkimg.native_qemu.sh + build/genapkovl-native-qemu.sh.
-#
-# aarch64 note: this builds on GitHub's native arm64 runner (ubuntu-24.04-arm),
-# not by cross-building on x86_64. GitHub-hosted arm64 runners are free for
-# public repositories; private repos need a plan that includes them. The
-# actual Alpine/mkimage.sh work runs inside a plain `docker run` step (build/
-# ci-build.sh), not GitHub's job-level `container:` — that feature can't run
-# JS actions (checkout, upload-artifact) on arm64 runners.
+# own mkimage.sh tooling, multi-platform nq-disk host helpers, and release
+# zips that pair each helper with the ISOs.
 
 on:
   push:
@@ -22,6 +15,67 @@ env:
   ALPINE_VERSION: "3.20"
 
 jobs:
+  nq-disk:
+    name: nq-disk (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            platform: macos-arm64
+            bin_name: nq-disk
+          - target: x86_64-apple-darwin
+            runner: macos-13
+            platform: macos-x86_64
+            bin_name: nq-disk
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            platform: linux-x86_64
+            bin_name: nq-disk
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            platform: linux-aarch64
+            bin_name: nq-disk
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            platform: windows-x86_64
+            bin_name: nq-disk.exe
+            is_windows: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build nq-disk
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build -p nq-disk --release
+          mkdir -p "dist/nq-disk/${{ matrix.platform }}"
+          if [ "${{ matrix.is_windows }}" = "true" ]; then
+            cp target/release/nq-disk.exe "dist/nq-disk/${{ matrix.platform }}/${{ matrix.bin_name }}"
+          else
+            cp target/release/nq-disk "dist/nq-disk/${{ matrix.platform }}/${{ matrix.bin_name }}"
+            chmod +x "dist/nq-disk/${{ matrix.platform }}/${{ matrix.bin_name }}"
+          fi
+
+      - name: Test nq-disk
+        shell: bash
+        run: cargo test -p nq-disk
+
+      - name: Upload nq-disk
+        uses: actions/upload-artifact@v4
+        with:
+          name: nq-disk-${{ matrix.platform }}
+          path: dist/nq-disk/${{ matrix.platform }}/*
+          if-no-files-found: error
+
   build:
     name: Build ${{ matrix.arch }} ISO
     runs-on: ${{ matrix.runner }}
@@ -36,6 +90,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Build ISO in Alpine container
         env:
@@ -55,24 +111,133 @@ jobs:
           path: dist/*.iso
           if-no-files-found: error
 
+  # Pair each host helper with the ISOs into a downloadable zip.
+  # Runs on every successful build (PR / main / manual / tag).
+  package:
+    name: Package release zips
+    needs: [build, nq-disk]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Pack per-platform zips
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release
+
+          iso_x64=$(find artifacts/native-qemu-x86_64 -name '*.iso' | head -n1)
+          iso_arm=$(find artifacts/native-qemu-aarch64 -name '*.iso' | head -n1)
+          test -n "$iso_x64"
+          test -n "$iso_arm"
+
+          # platform folder name → zip suffix
+          pack_one() {
+            local platform="$1"
+            local dir="artifacts/nq-disk-${platform}"
+            local bin
+            bin=$(find "$dir" -type f \( -name 'nq-disk' -o -name 'nq-disk.exe' \) | head -n1)
+            test -n "$bin"
+
+            local zipdir
+            zipdir=$(mktemp -d)
+            # Friendly binary name inside the zip
+            if [[ "$bin" == *.exe ]]; then
+              cp "$bin" "$zipdir/nq-disk.exe"
+            else
+              cp "$bin" "$zipdir/nq-disk"
+              chmod +x "$zipdir/nq-disk"
+            fi
+            # Both boot ISOs — host OS is independent of target machine arch
+            cp "$iso_x64" "$zipdir/native-qemu-x86_64.iso"
+            cp "$iso_arm" "$zipdir/native-qemu-aarch64.iso"
+
+            cat > "$zipdir/README.txt" <<EOF
+          native-qemu — flash kit (${platform})
+          =====================================
+
+          Contents
+            nq-disk[.exe]              interactive host helper (this platform)
+            native-qemu-x86_64.iso     boot ISO for Intel/AMD PCs
+            native-qemu-aarch64.iso    boot ISO for ARM64 machines
+
+          Quick start
+            1. Run nq-disk as root / Administrator (macOS: sudo ./nq-disk).
+            2. Flash ISO → pick the USB stick (system disks are hidden).
+               Choose the ISO that matches the machine you will boot, not this PC.
+            3. Edit config.toml on the USB data volume (completion + validate).
+            4. Load / replace image.qcow2 if needed (path is always image.qcow2).
+            5. Unmount, move the stick to the target, boot it.
+
+          Keys in the config editor
+            Tab / Ctrl+Space   value completions
+            Enter              replace selected value (menu closes)
+            ↑ on first item / ↓ on last item   leave menu + move line
+            ^O                 save & exit   ·   ^C exit   ·   ^Z undo
+
+          Project: https://github.com/${{ github.repository }}
+          EOF
+
+            local out="dist/release/native-qemu-${platform}.zip"
+            (cd "$zipdir" && zip -9 -r "$GITHUB_WORKSPACE/$out" .)
+            echo "packed $out ($(du -h "$GITHUB_WORKSPACE/$out" | awk '{print $1}'))"
+            rm -rf "$zipdir"
+          }
+
+          pack_one macos-arm64
+          pack_one macos-x86_64
+          pack_one linux-x86_64
+          pack_one linux-aarch64
+          pack_one windows-x86_64
+
+          # Also keep raw ISOs next to the zips for convenience
+          cp "$iso_x64" dist/release/native-qemu-x86_64.iso
+          cp "$iso_arm" dist/release/native-qemu-aarch64.iso
+
+          echo "---- dist/release ----"
+          ls -lah dist/release/
+
+      - name: Upload release package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-qemu-release-packages
+          path: dist/release/*
+          if-no-files-found: error
+
   release:
     name: Publish GitHub Release
-    needs: build
+    needs: [package]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download all ISO artifacts
+      - name: Download packages
         uses: actions/download-artifact@v4
         with:
-          path: dist
+          name: native-qemu-release-packages
+          path: dist/release
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*/*.iso
+          files: dist/release/*
           generate_release_notes: true
-          # A release-candidate tag publishes the same verified ISO artifacts
-          # without implying that the physical-device checklist is complete.
           prerelease: ${{ contains(github.ref_name, '-rc') }}
+          body: |
+            ## Downloads
+
+            Pick the zip for the **computer you use to flash the USB** (not the machine that will boot it):
+
+            | Host | Zip |
+            |---|---|
+            | macOS Apple Silicon | `native-qemu-macos-arm64.zip` |
+            | macOS Intel | `native-qemu-macos-x86_64.zip` |
+            | Linux x86_64 | `native-qemu-linux-x86_64.zip` |
+            | Linux ARM64 | `native-qemu-linux-aarch64.zip` |
+            | Windows x86_64 | `native-qemu-windows-x86_64.zip` |
+
+            Each zip includes `nq-disk`, both boot ISOs (`x86_64` + `aarch64`), and a short README.
+            Raw ISOs are also attached for advanced use.

@@ -55,23 +55,24 @@ mkimage flow runs, use:
 
 ## Writing the ISO to a USB stick
 
-These images are hybrid ISOs — the same file that boots as an optical image can be written directly
-(raw) to a USB stick. **Writing to the wrong device will destroy whatever is on it — double-check
-the device path before running anything.**
-
-The supplied helper requires an explicit acknowledgement, rejects partitions and macOS's system disk,
-unmounts the target where appropriate, and SHA-256-verifies the bytes it wrote:
+Use **`nq-disk`** (interactive menu — preferred). Release zips ship the ISO plus a binary for your OS.
 
 ```sh
-# macOS example (identify the external disk first with: diskutil list):
-sudo scripts/write-usb.sh --yes-really-write native-qemu-x86_64.iso /dev/rdisk4
-
-# Linux example (identify the whole disk first with: lsblk):
-sudo scripts/write-usb.sh --yes-really-write native-qemu-x86_64.iso /dev/sdb
+# From a release zip, or from this repo:
+cargo run -p nq-disk
+# then: Flash ISO → Edit config → Load image → Unmount
 ```
 
-It deliberately refuses partition paths such as `/dev/sdb1` and `/dev/disk4s1`. Read the platform
-notes below before choosing the target.
+`nq-disk` flashes the hybrid ISO, creates an **ext4** data volume (`LABEL=native-qemu`) with
+`config.toml` + `image.qcow2`, and lets you edit the config (completion + validate) and replace the
+guest image without changing the config path. System disks are excluded from the picker.
+
+Low-level alternative (ISO only, no data volume seed):
+
+```sh
+sudo scripts/write-usb.sh --yes-really-write native-qemu-x86_64.iso /dev/rdiskN   # macOS
+sudo scripts/write-usb.sh --yes-really-write native-qemu-x86_64.iso /dev/sdX      # Linux
+```
 
 ### macOS
 
@@ -150,19 +151,6 @@ order. A missing disk or a required missing USB device enters the rescue shell b
   authority on an existing network.
 - `[[smb_share]]` supports `vm_only` shares bound only to that bridge and `global` shares bound only
   to `[smb].lan_iface`. Every share requires a password file; never put passwords in `config.toml`.
-
-### Windows XP VirtIO test image
-
-`/Users/ido/Downloads/WinXpAgent (1).qcow2` passed a read-only QCOW2 integrity check and is suitable
-as the x86_64 test guest. Copy it to the appliance storage selected by `storage = 1`, for example
-`vms/WinXpAgent.qcow2`, then copy the bundled
-`/etc/native-qemu/examples/winxp-virtio.toml` to `/etc/native-qemu/config.toml` (the same source
-profile is also at [`examples/winxp-virtio.toml`](examples/winxp-virtio.toml)).
-
-Windows XP must already have the Red Hat `viostor` (VirtIO block) driver installed to boot from a
-VirtIO disk. If it does not, install that driver while the image is still booted through its existing
-controller before switching to this profile. The initial physical test should retain a keyboard and
-mouse for guest passthrough and keep a separate SSH management path available.
 
 ## Contributing / building blocks
 

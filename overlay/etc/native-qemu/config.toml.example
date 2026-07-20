@@ -1,12 +1,13 @@
 # native-qemu configuration.
 #
 # On boot, native-qemu-agent tries, in order:
-#   1) /media/<boot-device>/config.toml (editable on writable boot media)
-#   2) /media/<boot-device>/CONFIG.TOML (legacy filename variant)
-#   3) /config.toml (image default)
-#   4) /CONFIG.TOML (legacy filename variant)
-#   5) /etc/native-qemu/config.toml
-#   6) /etc/native-qemu/config.toml.example
+#   1) LABEL=native-qemu data volume /config.toml (writable ext4 USB partition)
+#   2) /media/<boot-device>/config.toml (editable on writable boot media)
+#   3) /media/<boot-device>/CONFIG.TOML (legacy filename variant)
+#   4) /config.toml (image default)
+#   5) /CONFIG.TOML (legacy filename variant)
+#   6) /etc/native-qemu/config.toml
+#   7) /etc/native-qemu/config.toml.example
 #
 # For persistent changes in the host filesystem, copy the active config to
 # /etc/native-qemu/config.toml and run `lbu commit`.
@@ -16,13 +17,19 @@ version = 1
 [vm]
 arch     = "x86_64"      # x86_64 | aarch64 — MUST match this machine's own architecture
 firmware = "bios"        # bios (default) | uefi (x86_64 uses bundled OVMF; aarch64 always uses AAVMF UEFI)
+machine  = "q35"         # x86: pc | q35 (default). aarch64 always uses virt.
 memory   = "2G"
 vcpus    = 2
+# sockets / cores / threads: when all three are > 0 they are passed as QEMU
+# topology (`-smp N,sockets=…,cores=…,threads=…`); leave at 0 to use vcpus only.
+# sockets  = 1
+# cores    = 1
+# threads  = 1
 cpu      = "host"
 
 [vm.disk]
 format  = "raw"        # raw | qcow2
-storage = 1               # 0 = boot USB, 1 = first internal disk, 2.. = external disks, in stable order
+storage = 1               # 0 = data volume (LABEL=native-qemu) or boot USB, 1 = first internal disk, 2.. = external disks
 path    = "vms/test.img" # path inside the resolved storage's mountpoint — must already exist
 bus     = "virtio"        # virtio | scsi | ide
 cache   = "none"
@@ -36,10 +43,11 @@ model        = "virtio-net-pci"
 [sound]
 enabled = false
 backend = "alsa"          # alsa | pipewire (starts PipeWire + pipewire-pulse)
-model   = "virtio-sound-pci"
+model   = "virtio-sound-pci"  # virtio-sound-pci | sb16 | AC97 | ES1370 | intel-hda | …
 
 [display]
 backend = "sdl"           # sdl = direct physical KMS/DRM guest display | none = deliberately headless
+vga     = "VGA"           # VGA | cirrus | std | virtio | virtio-gpu-pci
 
 [usb]
 default = "passthrough"   # passthrough (default: pass through everything not excluded) | host-only

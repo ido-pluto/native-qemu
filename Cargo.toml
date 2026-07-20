@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "agent",
+    "tools/nq-disk",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"

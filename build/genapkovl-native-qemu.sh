@@ -24,9 +24,15 @@ fi
 
 # Place direct root-level config.toml copies in the appliance image so operators
 # can edit this file on writable boot media before first run.
+# Prefer assets/default/config.toml (ReactOS / Win98 SE legacy PC profile) when
+# present; fall back to the documented example otherwise.
 # A duplicate uppercase 8.3-style name is intentionally included because older
 # legacy media readers may fold filenames to case-insensitive/short-name style.
-cp "$OVERLAY_SRC/etc/native-qemu/config.toml.example" "$tmp/config.toml"
+if [ -f "$REPO_ROOT/assets/default/config.toml" ]; then
+	cp "$REPO_ROOT/assets/default/config.toml" "$tmp/config.toml"
+else
+	cp "$OVERLAY_SRC/etc/native-qemu/config.toml.example" "$tmp/config.toml"
+fi
 cat "$tmp/config.toml" > "$tmp/CONFIG.TOML"
 
 # Keep the physical Windows XP VirtIO test profile available on the appliance
