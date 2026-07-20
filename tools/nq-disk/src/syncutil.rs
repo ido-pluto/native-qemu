@@ -6,13 +6,13 @@
 
 use std::fs::File;
 use std::io::{self, Write};
-use std::os::fd::AsRawFd;
 
 /// Flush + fsync a file/device; ignore ENOTTY/EINVAL which raw disks often return.
 pub fn safe_sync(file: &mut File) -> io::Result<()> {
     let _ = file.flush();
     #[cfg(unix)]
     {
+        use std::os::fd::AsRawFd;
         let fd = file.as_raw_fd();
         // Prefer plain fsync over F_FULLFSYNC (what Rust sync_all uses on macOS).
         let rc = unsafe { libc::fsync(fd) };

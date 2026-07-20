@@ -13,7 +13,6 @@ use anyhow::{bail, Context, Result};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Physical sector size we use for raw device I/O (512 is universal for USB).
 pub const SECTOR: u64 = 512;
@@ -220,6 +219,7 @@ fn prefer_raw(path: &Path) -> PathBuf {
 pub fn probe_size(path: &Path) -> Result<u64> {
     #[cfg(target_os = "macos")]
     {
+        use std::process::Command;
         let logical = path
             .to_string_lossy()
             .replace("/dev/rdisk", "/dev/disk");
@@ -244,6 +244,7 @@ pub fn probe_size(path: &Path) -> Result<u64> {
     }
     #[cfg(target_os = "linux")]
     {
+        use std::process::Command;
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         let sys = format!("/sys/block/{name}/size");
         if let Ok(s) = std::fs::read_to_string(&sys) {

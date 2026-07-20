@@ -1,7 +1,9 @@
 //! Host utilities — flash is self-contained (bundled lwext4 + pure-Rust GPT).
 //! Only root and a large-enough target disk are required at runtime.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
+#[cfg(unix)]
+use anyhow::bail;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 

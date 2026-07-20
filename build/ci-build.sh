@@ -19,9 +19,29 @@ apk add --no-cache \
 # proper musl binary with no cross-compilation needed at all. Alpine 3.20
 # ships rustc 1.78, which predates a couple of crates' newer minimum
 # versions — see agent/Cargo.toml's indexmap pin.
-( cd /repo/agent && cargo test --locked && cargo build --locked --release )
+#
+# Build via the workspace root so the binary lands at a predictable path
+# (/repo/target/release/...), not /repo/agent/target (workspace members
+# share the root target dir).
+( cd /repo && cargo test -p native-qemu-agent --locked \
+	&& cargo build -p native-qemu-agent --locked --release )
 mkdir -p /repo/overlay/usr/local/bin
-cp /repo/agent/target/release/native-qemu-agent /repo/overlay/usr/local/bin/native-qemu-agent
+agent_bin=""
+for candidate in \
+	/repo/target/release/native-qemu-agent \
+	/repo/agent/target/release/native-qemu-agent; do
+	if [ -x "$candidate" ]; then
+		agent_bin=$candidate
+		break
+	fi
+done
+if [ -z "$agent_bin" ]; then
+	echo "native-qemu: agent binary not found after cargo build" >&2
+	find /repo -name 'native-qemu-agent' -type f 2>/dev/null | head -20 >&2 || true
+	exit 1
+fi
+echo "native-qemu: installing agent from $agent_bin"
+cp "$agent_bin" /repo/overlay/usr/local/bin/native-qemu-agent
 
 # syslinux (BIOS/legacy bootloader) only exists as an x86/x86_64 package —
 # there's no aarch64 build of it at all, so only install it when we're

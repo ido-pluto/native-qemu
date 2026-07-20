@@ -131,9 +131,9 @@ pub fn ensure_data_partition(disk: &Path, iso_size: u64) -> Result<DataPartition
 }
 
 fn reread_pt(disk: &Path) {
-    use std::process::Command;
     #[cfg(target_os = "linux")]
     {
+        use std::process::Command;
         let _ = Command::new("partprobe").arg(disk).status();
         let _ = Command::new("blockdev")
             .args(["--rereadpt", disk.to_str().unwrap_or("")])
@@ -141,10 +141,15 @@ fn reread_pt(disk: &Path) {
     }
     #[cfg(target_os = "macos")]
     {
+        use std::process::Command;
         let logical = disk
             .to_string_lossy()
             .replace("/dev/rdisk", "/dev/disk");
         let _ = Command::new("diskutil").args(["list", &logical]).status();
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = disk;
     }
 }
 

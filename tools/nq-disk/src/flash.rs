@@ -401,6 +401,10 @@ fn unmount_disk(disk: &Path) -> Result<()> {
             }
         }
     }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = disk;
+    }
     Ok(())
 }
 
