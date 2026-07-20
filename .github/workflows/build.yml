@@ -13,8 +13,6 @@ on:
 
 env:
   ALPINE_VERSION: "3.20"
-  # Run JS actions on Node 24 (avoids Node 20 deprecation path).
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   nq-disk:
@@ -44,7 +42,7 @@ jobs:
             is_windows: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           lfs: true
 
@@ -69,7 +67,7 @@ jobs:
         run: cargo test -p nq-disk
 
       - name: Upload nq-disk
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nq-disk-${{ matrix.platform }}
           path: dist/nq-disk/${{ matrix.platform }}/*
@@ -88,7 +86,7 @@ jobs:
             runner: ubuntu-24.04-arm
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           lfs: true
 
@@ -106,7 +104,7 @@ jobs:
             sh /repo/build/ci-build.sh
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: native-qemu-${{ matrix.arch }}
           path: dist/native-qemu-${{ matrix.arch }}.iso
@@ -120,7 +118,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -200,7 +198,7 @@ jobs:
           ls -lah dist/release/
 
       - name: Upload release package artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: native-qemu-release-packages
           path: dist/release/*
@@ -215,13 +213,13 @@ jobs:
       contents: write
     steps:
       - name: Download packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: native-qemu-release-packages
           path: dist/release
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/release/*
           generate_release_notes: true
