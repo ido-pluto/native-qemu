@@ -5,9 +5,9 @@
 
 use anyhow::{bail, Context, Result};
 use ext4_lwext4::BlockDevice;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 
 const DEFAULT_BLOCK: u32 = 512;
@@ -27,13 +27,11 @@ pub struct SliceBlockDevice {
 impl SliceBlockDevice {
     /// Open a whole-disk or partition node and use the entire device size.
     pub fn open_path(path: impl AsRef<Path>) -> Result<Self> {
-        let path = prefer_raw_path(path.as_ref());
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&path)
+        let path = path.as_ref();
+        let file = crate::rawdisk::open_raw(path, true)
             .with_context(|| format!("open block device {}", path.display()))?;
-        let size = device_size(&file, &path)?;
+        let open_path = crate::rawdisk::prefer_raw(path);
+        let size = device_size(&file, &open_path)?;
         if size < 1024 * 1024 {
             bail!("{} is too small ({size} bytes)", path.display());
         }
@@ -48,11 +46,9 @@ impl SliceBlockDevice {
 
     /// Open a whole disk and address only `[start_bytes, start_bytes + size_bytes)`.
     pub fn open_slice(path: impl AsRef<Path>, start_bytes: u64, size_bytes: u64) -> Result<Self> {
-        let path = prefer_raw_path(path.as_ref());
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&path)
+        let path = path.as_ref();
+        // Retries + unmount: macOS remounts hybrid ISO volumes between GPT and mkfs.
+        let file = crate::rawdisk::open_raw(path, true)
             .with_context(|| format!("open {}", path.display()))?;
         if size_bytes < 1024 * 1024 {
             bail!("partition slice too small ({size_bytes} bytes)");
@@ -138,18 +134,6 @@ impl BlockDevice for SliceBlockDevice {
     fn block_count(&self) -> u64 {
         self.block_count
     }
-}
-
-fn prefer_raw_path(path: &Path) -> PathBuf {
-    let s = path.to_string_lossy();
-    if s.contains("/dev/disk") && !s.contains("/dev/rdisk") {
-        let raw = s.replacen("/dev/disk", "/dev/rdisk", 1);
-        let p = PathBuf::from(&raw);
-        if p.exists() {
-            return p;
-        }
-    }
-    path.to_path_buf()
 }
 
 fn device_size(file: &File, path: &Path) -> Result<u64> {

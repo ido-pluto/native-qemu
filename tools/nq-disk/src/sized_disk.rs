@@ -10,7 +10,7 @@
 //! buffering that fails immediately with "Invalid argument (os error 22)".
 
 use anyhow::{bail, Context, Result};
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
@@ -50,19 +50,8 @@ impl SizedDisk {
         }
         // Round size down to sector — never I/O past a partial trailing sector.
         let size = (size / SECTOR) * SECTOR;
-        let open_path = prefer_raw(path);
-        let mut opts = OpenOptions::new();
-        opts.read(true);
-        if writable {
-            opts.write(true);
-        }
-        let file = opts.open(&open_path).with_context(|| {
-            format!(
-                "open {} for {}",
-                open_path.display(),
-                if writable { "R/W" } else { "read" }
-            )
-        })?;
+        let open_path = crate::rawdisk::prefer_raw(path);
+        let file = crate::rawdisk::open_raw(path, writable)?;
         Ok(Self {
             file,
             size,
@@ -222,18 +211,6 @@ impl Seek for SizedDisk {
         self.pos = new_pos;
         Ok(new_pos)
     }
-}
-
-fn prefer_raw(path: &Path) -> PathBuf {
-    let s = path.to_string_lossy();
-    if s.contains("/dev/disk") && !s.contains("/dev/rdisk") {
-        let raw = s.replacen("/dev/disk", "/dev/rdisk", 1);
-        let p = PathBuf::from(&raw);
-        if p.exists() {
-            return p;
-        }
-    }
-    path.to_path_buf()
 }
 
 pub fn probe_size(path: &Path) -> Result<u64> {

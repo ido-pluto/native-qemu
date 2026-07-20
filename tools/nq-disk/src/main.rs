@@ -3,6 +3,7 @@ mod ext4_io;
 mod flash;
 mod format_size;
 mod partition;
+mod rawdisk;
 mod schema;
 mod sized_disk;
 mod syncutil;
