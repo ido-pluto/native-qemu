@@ -13,6 +13,8 @@ on:
 
 env:
   ALPINE_VERSION: "3.20"
+  # Run JS actions on Node 24 (avoids Node 20 deprecation path).
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   nq-disk:
@@ -22,13 +24,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Apple Silicon only — Intel Mac host builds are not required.
           - target: aarch64-apple-darwin
             runner: macos-14
             platform: macos-arm64
-            bin_name: nq-disk
-          - target: x86_64-apple-darwin
-            runner: macos-13
-            platform: macos-x86_64
             bin_name: nq-disk
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
@@ -189,7 +188,6 @@ jobs:
           }
 
           pack_one macos-arm64
-          pack_one macos-x86_64
           pack_one linux-x86_64
           pack_one linux-aarch64
           pack_one windows-x86_64
@@ -236,7 +234,6 @@ jobs:
             | Host | Zip |
             |---|---|
             | macOS Apple Silicon | `native-qemu-macos-arm64.zip` |
-            | macOS Intel | `native-qemu-macos-x86_64.zip` |
             | Linux x86_64 | `native-qemu-linux-x86_64.zip` |
             | Linux ARM64 | `native-qemu-linux-aarch64.zip` |
             | Windows x86_64 | `native-qemu-windows-x86_64.zip` |
