@@ -12,6 +12,8 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct DiskInfo {
@@ -319,6 +321,16 @@ pub fn flash_iso(
     });
     write_iso_raw(iso, disk, iso_size, &mut progress).context("write ISO to disk")?;
 
+    // After the write handle closes, macOS Disk Arbitration remounts the
+    // hybrid ISO partitions (EFI/alpine/…). That makes /dev/rdiskN EBUSY
+    // (os error 16) until we force-unmount again.
+    progress(FlashProgress {
+        phase: "unmounting (macOS remounts after write)".into(),
+        bytes_done: 0,
+        bytes_total: 1,
+    });
+    release_disk(disk).context("unmount after ISO write")?;
+
     progress(FlashProgress {
         phase: "verifying ISO".into(),
         bytes_done: 0,
@@ -326,15 +338,42 @@ pub fn flash_iso(
     });
     verify_iso_prefix(iso, disk, iso_size, &mut progress).context("verify ISO on disk")?;
 
-    unmount_disk(disk).context("unmount after write")?;
+    release_disk(disk).context("unmount after verify")?;
 
     progress(FlashProgress {
         phase: "creating GPT data partition".into(),
         bytes_done: 0,
         bytes_total: 1,
     });
-    let part = partition::ensure_data_partition(disk, iso_size)
-        .context("create data partition (bundled GPT)")?;
+    // GPT rewrite also needs an exclusive open — unmount again if macOS remounted.
+    let part = {
+        let mut last_err = None;
+        let mut created = None;
+        for attempt in 0..6 {
+            release_disk(disk)?;
+            match partition::ensure_data_partition(disk, iso_size) {
+                Ok(p) => {
+                    created = Some(p);
+                    break;
+                }
+                Err(e) => {
+                    let msg = format!("{e:#}");
+                    let busy = msg.contains("Resource busy")
+                        || msg.contains("os error 16")
+                        || msg.contains("EBUSY")
+                        || msg.contains("busy");
+                    last_err = Some(e);
+                    if !busy {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(300 + attempt * 200));
+                }
+            }
+        }
+        created.ok_or_else(|| {
+            last_err.unwrap_or_else(|| anyhow::anyhow!("create data partition failed"))
+        })?
+    };
 
     progress(FlashProgress {
         phase: "extracting default image from ISO".into(),
@@ -380,6 +419,7 @@ fn unmount_disk(disk: &Path) -> Result<()> {
         let logical = disk
             .to_string_lossy()
             .replace("/dev/rdisk", "/dev/disk");
+        // force unmount every volume on the whole disk (not eject — keep device node).
         let _ = Command::new("diskutil")
             .args(["unmountDisk", "force", &logical])
             .status();
@@ -406,6 +446,79 @@ fn unmount_disk(disk: &Path) -> Result<()> {
         let _ = disk;
     }
     Ok(())
+}
+
+/// Unmount + brief settle, repeated — macOS often remounts hybrid ISOs immediately.
+fn release_disk(disk: &Path) -> Result<()> {
+    for attempt in 0..6 {
+        unmount_disk(disk)?;
+        // Give disk arbitration a moment to drop claims on the raw device.
+        thread::sleep(Duration::from_millis(200 + attempt * 150));
+        // Probe: can we open the raw device?
+        match open_disk_retry_once(disk, false) {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                let msg = format!("{e:#}");
+                let busy = msg.contains("Resource busy")
+                    || msg.contains("os error 16")
+                    || msg.contains("EBUSY")
+                    || msg.contains("busy");
+                if !busy || attempt == 5 {
+                    // Last attempt still busy — still return Ok so caller can
+                    // try open_disk_retry with more unmounts; only hard-fail later.
+                    if attempt == 5 && busy {
+                        // One more forceful unmount then continue.
+                        unmount_disk(disk)?;
+                        thread::sleep(Duration::from_millis(500));
+                        return Ok(());
+                    }
+                    if !busy {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn open_disk_retry_once(disk: &Path, writable: bool) -> Result<crate::sized_disk::SizedDisk> {
+    if writable {
+        crate::sized_disk::SizedDisk::open_rw(disk)
+    } else {
+        crate::sized_disk::SizedDisk::open_ro(disk)
+    }
+}
+
+/// Open raw disk with unmount retries (handles macOS EBUSY after hybrid write).
+fn open_disk_retry(disk: &Path, writable: bool) -> Result<crate::sized_disk::SizedDisk> {
+    let mut last = None;
+    for attempt in 0..8 {
+        match open_disk_retry_once(disk, writable) {
+            Ok(d) => return Ok(d),
+            Err(e) => {
+                let msg = format!("{e:#}");
+                let busy = msg.contains("Resource busy")
+                    || msg.contains("os error 16")
+                    || msg.contains("EBUSY")
+                    || msg.contains("busy");
+                last = Some(e);
+                if !busy {
+                    break;
+                }
+                unmount_disk(disk)?;
+                thread::sleep(Duration::from_millis(250 + attempt * 200));
+            }
+        }
+    }
+    Err(last.unwrap_or_else(|| anyhow::anyhow!("open disk failed")))
+        .with_context(|| {
+            format!(
+                "open {} after retries (is a volume still mounted? try: diskutil unmountDisk force {})",
+                disk.display(),
+                disk.to_string_lossy().replace("/dev/rdisk", "/dev/disk")
+            )
+        })
 }
 
 fn write_iso_raw(
@@ -466,12 +579,11 @@ fn verify_iso_prefix(
     iso_size: u64,
     progress: &mut impl FnMut(FlashProgress),
 ) -> Result<()> {
-    use crate::sized_disk::SizedDisk;
-
     let mut expected = Sha256::new();
     let mut actual = Sha256::new();
     let mut src = File::open(iso)?;
-    let mut dev = SizedDisk::open(disk).context("open disk for verify")?;
+    // Read-only + retries: after hybrid write macOS remounts and EBUSY's rdisk.
+    let mut dev = open_disk_retry(disk, false).context("open disk for verify")?;
     // 1 MiB is sector-aligned
     let mut buf_a = vec![0u8; 1024 * 1024];
     let mut buf_b = vec![0u8; 1024 * 1024];
@@ -497,6 +609,8 @@ fn verify_iso_prefix(
             });
         }
     }
+    // Drop device handle before returning so later GPT write can open R/W.
+    drop(dev);
     if expected.finalize() != actual.finalize() {
         bail!("ISO verification failed — device contents do not match the image");
     }

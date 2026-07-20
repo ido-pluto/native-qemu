@@ -4,7 +4,8 @@ Cross-platform host tool for native-qemu USB sticks.
 
 **Self-contained:** ext4 (vendored **lwext4** C library) and GPT partitioning
 (pure Rust **`gpt`** crate) are **compiled into the binary**. End users do
-**not** need Homebrew, e2fsprogs, or gptfdisk — only **sudo** for raw disk I/O.
+**not** need Homebrew, e2fsprogs, or gptfdisk — only **sudo** (everything needs
+root: flash, config editor, file manager, load image, unmount).
 
 ## Features
 
@@ -17,16 +18,17 @@ Cross-platform host tool for native-qemu USB sticks.
 
 ## Run
 
+Without root the process **exits immediately** with instructions — no menu.
+
 ```sh
-# Interactive menu (needs sudo for flash)
+# Always use sudo (macOS / Linux)
+sudo ./nq-disk
+
+# From this repo:
 sudo cargo run -p nq-disk --release
 
-cargo run -p nq-disk -- list-disks
-cargo run -p nq-disk -- preflight --iso ./native-qemu-x86_64.iso --disk /dev/rdisk4
-sudo cargo run -p nq-disk -- flash --iso ./native-qemu-x86_64.iso --disk /dev/rdisk4 --yes
-cargo run -p nq-disk -- status
-cargo run -p nq-disk -- put-image ./my.qcow2
-cargo run -p nq-disk -- validate-config assets/default/config.toml
+sudo ./nq-disk -- flash --iso ./native-qemu-x86_64.iso --disk /dev/rdisk4 --yes
+sudo ./nq-disk -- status
 ```
 
 ## Flash pipeline

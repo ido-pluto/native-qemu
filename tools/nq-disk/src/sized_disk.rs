@@ -30,6 +30,19 @@ pub struct SizedDisk {
 impl SizedDisk {
     /// Prefer `/dev/rdiskN` on macOS for raw I/O; size from diskutil.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_rw(path)
+    }
+
+    pub fn open_rw(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with(path, true)
+    }
+
+    /// Read-only open (verify path). Still needs the disk unmounted on macOS.
+    pub fn open_ro(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with(path, false)
+    }
+
+    fn open_with(path: impl AsRef<Path>, writable: bool) -> Result<Self> {
         let path = path.as_ref();
         let size = probe_size(path)?;
         if size == 0 {
@@ -38,11 +51,18 @@ impl SizedDisk {
         // Round size down to sector — never I/O past a partial trailing sector.
         let size = (size / SECTOR) * SECTOR;
         let open_path = prefer_raw(path);
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&open_path)
-            .with_context(|| format!("open {} for R/W", open_path.display()))?;
+        let mut opts = OpenOptions::new();
+        opts.read(true);
+        if writable {
+            opts.write(true);
+        }
+        let file = opts.open(&open_path).with_context(|| {
+            format!(
+                "open {} for {}",
+                open_path.display(),
+                if writable { "R/W" } else { "read" }
+            )
+        })?;
         Ok(Self {
             file,
             size,

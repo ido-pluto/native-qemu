@@ -75,6 +75,12 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
+    // Flash, volume edit, file manager, and GPT/ext4 all need raw disk access.
+    if !tools::running_as_root() {
+        eprint!("{}", tools::root_required_message());
+        std::process::exit(1);
+    }
+
     let cli = Cli::parse();
     match cli.cmd.unwrap_or(Commands::Menu) {
         Commands::Menu => ui::run_app(),

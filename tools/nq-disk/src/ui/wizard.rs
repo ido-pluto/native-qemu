@@ -100,7 +100,7 @@ impl App {
             .as_ref()
             .map(|v| v.root_display())
             .unwrap_or_else(|| "(not open)".into());
-        self.status = format!("ISO: {iso}   volume: {vol}");
+        self.status = format!("ISO: {iso}   volume: {vol}   root ✓");
     }
 
     fn ensure_volume(&mut self) -> Result<bool> {
@@ -901,7 +901,7 @@ fn draw(f: &mut ratatui::Frame, app: &App) {
             let hint = if *ok {
                 "\nEnter continue to confirm erase   Esc back"
             } else {
-                "\nEnter/Esc back — fix errors (e2fsprogs, gptfdisk, sudo) first"
+                "\nEnter/Esc back — re-run with:  sudo ./nq-disk"
             };
             f.render_widget(
                 Paragraph::new(format!("{report}{hint}"))
@@ -1030,8 +1030,7 @@ fn draw(f: &mut ratatui::Frame, app: &App) {
     }
 
     let footer = Paragraph::new(
-        "Flash needs sudo only — ext4 (lwext4) + GPT are bundled. \
-         Editor: ^O save ^W search ^X exit ^Space complete.",
+        "Running as root ✓  ·  Editor: ^O save  ^W search  ^X exit  Tab complete",
     )
     .block(Block::default().borders(Borders::ALL));
     f.render_widget(footer, chunks[2]);
