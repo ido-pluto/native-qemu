@@ -65,45 +65,41 @@ if [ -z "${AGENT_BIN:-}" ] || [ ! -x "$AGENT_BIN" ]; then
 	exit 1
 fi
 
-# --- Re-exec into Void container when host is not Void / missing xbps --------
-is_void=0
-if [ -f /etc/os-release ] && grep -qi '^ID=void' /etc/os-release; then
-	is_void=1
-fi
-if [ "$FORCE_DOCKER" = 1 ] || [ "$is_void" = 0 ] || ! command -v xbps-install >/dev/null 2>&1; then
-	if [ "$(id -u)" -eq 0 ] && [ "$is_void" = 1 ] && command -v xbps-install >/dev/null 2>&1; then
-		: # already root on Void
-	else
-		log "host is not Void with xbps — running via Docker ${DOCKER_IMAGE}"
-		if ! command -v docker >/dev/null 2>&1; then
-			echo "void-iso: docker required to build on non-Void hosts" >&2
-			exit 1
-		fi
-		mkdir -p "$OUTDIR" "$WORK"
-		# Map repo + caches; privileged for loop/mount in mklive
-		exec docker run --rm --privileged \
-			-e ARCH -e OUTDIR=/repo/dist -e WORK=/repo/.cache/void-iso \
-			-e QEMU_TARBALL=/qemu/qemu-3dfx-x86_64.tar.gz \
-			-e AGENT_BIN=/agent/native-qemu-agent \
-			-e FORCE_DOCKER=0 \
-			-v "$ROOT:/repo:rw" \
-			-v "$(cd "$(dirname "$QEMU_TARBALL")" && pwd)/$(basename "$QEMU_TARBALL"):/qemu/qemu-3dfx-x86_64.tar.gz:ro" \
-			-v "$(cd "$(dirname "$AGENT_BIN")" && pwd)/$(basename "$AGENT_BIN"):/agent/native-qemu-agent:ro" \
-			-w /repo \
-			"$DOCKER_IMAGE" \
-			/bin/sh -c '
-				set -eu
-				xbps-install -Syu xbps || true
-				xbps-install -Sy bash git curl tar xz rsync xorriso squashfs-tools \
-					liblz4 ca-certificates coreutils findutils grep sed gawk
-				exec bash /repo/build/void-iso.sh \
-					--qemu-tarball /qemu/qemu-3dfx-x86_64.tar.gz \
-					--agent-bin /agent/native-qemu-agent \
-					--outdir /repo/dist \
-					--work /repo/.cache/void-iso
-			'
+# --- Re-exec into Void container when host cannot run mklive natively --------
+# Prefer "do we have xbps-install?" over /etc/os-release (container images vary).
+have_xbps=0
+command -v xbps-install >/dev/null 2>&1 && have_xbps=1
+
+if [ "$FORCE_DOCKER" = 1 ] || [ "$have_xbps" = 0 ]; then
+	log "host lacks xbps (or FORCE_DOCKER=1) — running via Docker ${DOCKER_IMAGE}"
+	if ! command -v docker >/dev/null 2>&1; then
+		echo "void-iso: docker required to build on non-Void hosts" >&2
+		exit 1
 	fi
+	mkdir -p "$OUTDIR" "$WORK"
+	# Map repo + caches; privileged for loop/mount in mklive
+	exec docker run --rm --privileged \
+		-e ARCH \
+		-e FORCE_DOCKER=0 \
+		-v "$ROOT:/repo:rw" \
+		-v "$(cd "$(dirname "$QEMU_TARBALL")" && pwd)/$(basename "$QEMU_TARBALL"):/qemu/qemu-3dfx-x86_64.tar.gz:ro" \
+		-v "$(cd "$(dirname "$AGENT_BIN")" && pwd)/$(basename "$AGENT_BIN"):/agent/native-qemu-agent:ro" \
+		-w /repo \
+		"$DOCKER_IMAGE" \
+		/bin/sh -c '
+			set -eu
+			xbps-install -Syu xbps || true
+			xbps-install -Sy bash git curl tar xz rsync xorriso squashfs-tools \
+				liblz4 ca-certificates coreutils findutils grep sed gawk || true
+			exec bash /repo/build/void-iso.sh \
+				--qemu-tarball /qemu/qemu-3dfx-x86_64.tar.gz \
+				--agent-bin /agent/native-qemu-agent \
+				--outdir /repo/dist \
+				--work /repo/.cache/void-iso
+		'
 fi
+
+log "running natively with xbps-install"
 
 if [ "$(id -u)" -ne 0 ]; then
 	echo "void-iso: must run as root (or via Docker)" >&2
