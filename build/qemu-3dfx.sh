@@ -40,12 +40,16 @@ if command -v xbps-install >/dev/null 2>&1; then
 	echo "qemu-3dfx: ensuring Void build dependencies"
 	xbps-install -Syu xbps || true
 	xbps-install -Sy git curl tar xz rsync patch \
-		gcc make pkg-config python3 ninja \
+		gcc make pkg-config python3 python3-pip ninja \
 		glib-devel pixman-devel SDL2-devel libepoxy-devel \
 		libslirp-devel dtc zlib-devel libzstd-devel \
 		bash flex bison 2>/dev/null \
 	|| xbps-install -Sy git curl tar xz rsync patch gcc make pkg-config python3 \
-		ninja bash flex bison glib-devel pixman-devel SDL2-devel libepoxy-devel
+		python3-pip ninja bash flex bison glib-devel pixman-devel SDL2-devel libepoxy-devel
+	# QEMU's mkvenv needs distlib (not always packaged on Void)
+	python3 -m pip install --break-system-packages -q distlib setuptools wheel 2>/dev/null \
+		|| pip3 install -q distlib setuptools wheel 2>/dev/null \
+		|| true
 fi
 
 mkdir -p "$WORK" "$DESTDIR" "${ROOT}/dist"
