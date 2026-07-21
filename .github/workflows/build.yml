@@ -42,16 +42,22 @@ jobs:
             /bin/sh -c '
               set -eu
               xbps-install -Syu xbps || true
-              xbps-install -Sy git curl tar xz rsync patch \
-                gcc make pkg-config python3 python3-pip ninja \
-                glib-devel pixman-devel SDL2-devel libepoxy-devel \
-                libslirp-devel dtc zlib-devel libzstd-devel \
-                libX11-devel libXext-devel libXxf86vm-devel libXi-devel \
-                Mesa-devel bash flex bison ca-certificates
+              # Install packages one group at a time so a bad name does not abort the rest.
+              xbps-install -Syu xbps || true
+              xbps-install -Sy git curl tar xz rsync patch bash flex bison ca-certificates \
+                gcc make pkg-config python3 python3-pip ninja || true
+              xbps-install -Sy glib-devel pixman-devel SDL2-devel libepoxy-devel \
+                libslirp-devel dtc zlib-devel libzstd-devel || true
+              xbps-install -Sy libX11-devel libXext-devel libXxf86vm-devel libXi-devel \
+                libXrandr-devel libXrender-devel || true
+              # Mesa GL headers (package name varies by Void generation)
+              xbps-install -Sy MesaLib-devel 2>/dev/null \
+                || xbps-install -Sy libglvnd-devel 2>/dev/null \
+                || xbps-install -Sy Mesa-devel 2>/dev/null \
+                || true
               python3 -m pip install --break-system-packages -q distlib setuptools wheel \
                 || pip3 install -q distlib setuptools wheel
               chmod +x build/qemu-3dfx.sh
-              # qemu-3dfx.sh is bash; install bash above then use it
               bash ./build/qemu-3dfx.sh --pack
             '
           ls -lh dist/qemu-3dfx-x86_64.tar.gz

@@ -39,16 +39,15 @@ echo "qemu-3dfx: work=${WORK} destdir=${DESTDIR}"
 if command -v xbps-install >/dev/null 2>&1; then
 	echo "qemu-3dfx: ensuring Void build dependencies"
 	xbps-install -Syu xbps || true
-	xbps-install -Sy git curl tar xz rsync patch \
-		gcc make pkg-config python3 python3-pip ninja \
-		glib-devel pixman-devel SDL2-devel libepoxy-devel \
-		libslirp-devel dtc zlib-devel libzstd-devel \
-		libX11-devel libXext-devel libXxf86vm-devel libXi-devel \
-		Mesa-devel \
-		bash flex bison 2>/dev/null \
-	|| xbps-install -Sy git curl tar xz rsync patch gcc make pkg-config python3 \
-		python3-pip ninja bash flex bison glib-devel pixman-devel SDL2-devel \
-		libepoxy-devel libX11-devel libXext-devel libXxf86vm-devel Mesa-devel
+	xbps-install -Sy git curl tar xz rsync patch bash flex bison \
+		gcc make pkg-config python3 python3-pip ninja || true
+	xbps-install -Sy glib-devel pixman-devel SDL2-devel libepoxy-devel \
+		libslirp-devel dtc zlib-devel libzstd-devel || true
+	xbps-install -Sy libX11-devel libXext-devel libXxf86vm-devel libXi-devel \
+		libXrandr-devel libXrender-devel || true
+	xbps-install -Sy MesaLib-devel 2>/dev/null \
+		|| xbps-install -Sy libglvnd-devel 2>/dev/null \
+		|| true
 	# QEMU's mkvenv needs distlib (not always packaged on Void)
 	python3 -m pip install --break-system-packages -q distlib setuptools wheel 2>/dev/null \
 		|| pip3 install -q distlib setuptools wheel 2>/dev/null \
