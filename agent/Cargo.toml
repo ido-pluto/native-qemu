@@ -19,8 +19,4 @@ libc = "0.2"
 # releases to versions still compatible with 1.78.
 indexmap = "=2.2.6"
 
-[profile.release]
-opt-level = "z"
-lto = true
-strip = true
-panic = "abort"
+

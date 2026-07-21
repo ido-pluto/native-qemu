@@ -11,157 +11,134 @@ Use [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) before publishing a tagged rele
 
 ## Status
 
-This project is under active development. The ISO now boots directly into `native-qemu-agent`, which
-creates `/etc/native-qemu/config.toml` from its bundled example on first boot and launches a
-config-driven QEMU VM. It supports a local raw/qcow2 disk, user/bridge/macvtap networking, ALSA or
-PipeWire sound, direct physical guest display, USB passthrough, virtiofs and scoped SMB sharing, a
-guest-bridge docs/DNS service, startup/shutdown hooks, persistent logging, SSH, and lifecycle
-handling (power off, restart, or rescue shell).
+Active development. The appliance boots into `native-qemu-agent`, which loads `config.toml` from the
+USB data volume (`LABEL=native-qemu`) and launches a config-driven QEMU VM (legacy PC profile for
+ReactOS / Windows 98 SE class guests by default).
 
-The default config intentionally names a non-existent test disk, so a fresh stick stops at a rescue
-shell rather than starting an arbitrary disk. Put a guest disk at the configured storage path, edit
-the config, and run `lbu commit` before rebooting. Guest-bridge services require an existing bridge
-with an IPv4 address; global SMB sharing additionally requires a LAN interface and a password file.
-Check [plan.md](plan.md#phased-roadmap) for the remaining real-hardware release gates.
+**Product track (current CI):**
+
+| Piece | What ships today |
+|---|---|
+| Boot ISO | **`native-qemu-x86_64.iso`** (interim **Alpine** image) |
+| Host tool | **`nq-disk`** for macOS (Apple Silicon), Linux (x86_64 + aarch64), Windows |
+| Custom QEMU | **`qemu-3dfx-x86_64.tar.gz`** — QEMU **9.2.2** + [qemu-3dfx](https://github.com/kjliew/qemu-3dfx) (MESA GL / 3Dfx Glide), **glibc**, built in CI |
+| Target arch | **x86_64** appliance only (no aarch64 ISO in product CI) |
+| Next base OS | Migrating appliance rootfs to **Void Linux glibc** with this QEMU baked in (`build/void-iso.sh`) |
+
+Guest data always lives on the USB **ext4** volume: `config.toml` + `image.qcow2` (path fixed so you
+can swap guests without editing the config).
 
 ## Supported hardware
 
-Two separate builds, each running **natively** via KVM — there is no cross-architecture emulation:
-
-| ISO | Runs on |
+| Artifact | Runs on |
 |---|---|
-| `native-qemu-x86_64.iso` | x86_64 (Intel/AMD) machines |
-| `native-qemu-aarch64.iso` | aarch64 (ARM64) machines |
+| `native-qemu-x86_64.iso` | x86_64 (Intel/AMD) machines (KVM) |
 
-Use the ISO matching the physical machine you're booting it on, not the guest OS you intend to run.
+There is **no cross-architecture emulation**. Flash the stick on any host with `nq-disk`; **boot** it
+on an x86_64 PC that matches the ISO.
 
-## Getting the ISO
+## Getting a release kit
 
-Download the latest release from this repository's [Releases page](../../releases) — each tagged
-release includes both `native-qemu-x86_64.iso` and `native-qemu-aarch64.iso`, built automatically by
-GitHub Actions (see `.github/workflows/build.yml`).
+Tagged releases and workflow artifacts are built by [`.github/workflows/build.yml`](.github/workflows/build.yml).
 
-To build it yourself instead of downloading, push a tag (`git tag v0.1.0 && git push --tags`) or run
-the "Build ISOs" workflow manually from the Actions tab — it uploads both ISOs as workflow artifacts
-even without a tag.
+Each platform zip (e.g. `native-qemu-macos-arm64.zip`, `native-qemu-linux-x86_64.zip`,
+`native-qemu-windows-x86_64.zip`) contains:
 
-## Writing the ISO to a USB stick
+1. **`nq-disk`** / **`nq-disk.exe`** — interactive flash / config / volume tool  
+2. **`native-qemu-x86_64.iso`** — boot ISO for the target PC  
+3. **`qemu-3dfx-x86_64.tar.gz`** — prefix tree with `usr/local/bin/qemu-system-x86_64` (and tools)  
+4. **`README.txt`** — short flash instructions  
 
-These images are hybrid ISOs — the same file that boots as an optical image can be written directly
-(raw) to a USB stick. **Writing to the wrong device will destroy whatever is on it — double-check
-the device path before running anything.**
+Download from the [Releases](../../releases) page or from a green **Build ISOs** Actions run
+(artifact `native-qemu-release-packages`).
 
-The supplied helper requires an explicit acknowledgement, rejects partitions and macOS's system disk,
-unmounts the target where appropriate, and SHA-256-verifies the bytes it wrote:
+### Build yourself
 
 ```sh
-# macOS example (identify the external disk first with: diskutil list):
-sudo scripts/write-usb.sh --yes-really-write native-qemu-x86_64.iso /dev/rdisk4
+# Host tool
+cargo build -p nq-disk --release
 
-# Linux example (identify the whole disk first with: lsblk):
-sudo scripts/write-usb.sh --yes-really-write native-qemu-x86_64.iso /dev/sdb
+# Interim Alpine x86_64 ISO (containerized mkimage)
+./scripts/build-native-qemu-iso.sh x86_64 dist
+
+# Custom QEMU 9.2 + 3dfx (glibc host; long build)
+./build/qemu-3dfx.sh --pack   # → dist/qemu-3dfx-x86_64.tar.gz
 ```
 
-It deliberately refuses partition paths such as `/dev/sdb1` and `/dev/disk4s1`. Read the platform
-notes below before choosing the target.
+## Writing the stick — use `nq-disk` (required: sudo / Administrator)
 
-### macOS
+**Every `nq-disk` action needs root** (raw disks + ext4 data volume). Without elevation it exits
+immediately and prints how to re-run.
 
 ```sh
-# 1. Plug in the USB stick, then list disks to find it (look for the matching size):
-diskutil list
-
-# 2. Use its raw whole-disk path (e.g. /dev/rdisk4 — NOT /dev/disk4s1):
-sudo scripts/write-usb.sh --yes-really-write native-qemu-x86_64.iso /dev/rdiskN
+cd /path/to/unzipped-kit   # or next to the .iso
+sudo ./nq-disk             # macOS / Linux
+# Windows: run nq-disk.exe as Administrator
 ```
 
-### Linux
+Menu: **Flash ISO** → pick USB (system disks hidden) → **Edit config** → **Load image** → **Unmount**.
+
+Details: [tools/nq-disk/README.md](tools/nq-disk/README.md).
+
+Low-level ISO-only write (no data-volume seed):
 
 ```sh
-# 1. Find the device (look for the matching size — NOT a partition like /dev/sdb1):
-lsblk
-
-# 2. Unmount any auto-mounted partitions, then write and verify:
-sudo scripts/write-usb.sh --yes-really-write native-qemu-x86_64.iso /dev/sdX
+sudo scripts/write-usb.sh --yes-really-write native-qemu-x86_64.iso /dev/rdiskN   # macOS
+sudo scripts/write-usb.sh --yes-really-write native-qemu-x86_64.iso /dev/sdX      # Linux
 ```
 
-### Windows
+## QEMU 9.2 + 3dfx tarball
 
-Use [Rufus](https://rufus.ie/) or [balenaEtcher](https://etcher.balena.io/): select the downloaded
-`.iso` as the source, select the USB stick as the target, and write in **DD/raw image mode** (Rufus
-will prompt for this automatically when it detects a hybrid ISO — choose "Write in DD Image mode",
-not the default ISO mode).
+CI builds QEMU from [download.qemu.org](https://download.qemu.org/) **9.2.2** plus
+[kjliew/qemu-3dfx](https://github.com/kjliew/qemu-3dfx) (`00-qemu92x-mesa-glide.patch`). Script:
+[`build/qemu-3dfx.sh`](build/qemu-3dfx.sh).
 
-## Booting it
+```sh
+# Inspect
+tar tzf qemu-3dfx-x86_64.tar.gz | head
+# Install onto a glibc Linux root (e.g. future Void appliance)
+sudo tar -C / -xzf qemu-3dfx-x86_64.tar.gz
+# binary at /usr/local/bin/qemu-system-x86_64
+```
 
-1. Plug the USB stick into the target machine and power it on.
-2. Enter the boot menu (varies by machine — commonly `F12`, `F10`, `Esc`, or `Del` right after power
-   on) and select the USB stick. Both BIOS (legacy/CSM) and UEFI boot are supported on x86_64;
-   aarch64 machines boot it via UEFI.
-3. It boots directly into `native-qemu-agent`. On a fresh stick it creates the example config, then
-   opens a rescue shell because the example disk path does not exist.
+The interim Alpine ISO still uses **distro QEMU**; baking this tarball into the live image is the
+Void migration step (`build/void-iso.sh` — scaffold until Phase 1 lands).
+
+Guest **Glide/OpenGL wrappers** (Windows DLLs from qemu-3dfx) are installed **inside the guest OS**,
+not by the host flash tool. See the upstream qemu-3dfx README.
+
+## Booting
+
+1. Plug the stick into the **x86_64** target machine and open the firmware boot menu.  
+2. Select the USB (BIOS or UEFI).  
+3. `native-qemu-agent` starts; it uses the data volume `config.toml` and `image.qcow2` when present.
 
 ## Configuration
 
-On first boot the agent resolves configuration in this order:
-`/media/<boot-device>/config.toml`, `/config.toml`, `/etc/native-qemu/config.toml`,
-then `/etc/native-qemu/config.toml.example`. Edit the selected file and, for host-side
-persistence, run `lbu commit` if it should survive reboot.
+Preferred: edit on the host with `sudo ./nq-disk` → **Edit config** (completion, validate, undo).
 
-For example, to use a guest image at `vms/main.qcow2` on the first internal disk, set:
+On the appliance, the agent resolves config from the data volume / boot media / bundled defaults
+(see agent docs and [plan.md](plan.md)). Persistence for the stick is the **ext4 data volume**, not
+Alpine `lbu` (that path is interim-only).
 
-```toml
-[vm]
-arch = "x86_64"
+Default profile targets **legacy PC** guests (e.g. `machine = "pc"`, IDE, Cirrus) suitable for
+ReactOS / Win98 SE class systems; always keep the guest disk filename **`image.qcow2`**.
 
-[vm.disk]
-format = "qcow2"
-storage = 1
-path = "vms/main.qcow2"
+## Development
+
+```sh
+cargo test -p nq-disk
+cargo test -p native-qemu-agent --locked
 ```
 
-Then persist the edit from the appliance shell with `lbu commit` and reboot. Storage index `0` is
-the boot media, `1` is the first fixed internal disk, and `2+` are removable disks in stable name
-order. A missing disk or a required missing USB device enters the rescue shell by default.
+CI jobs (see `.github/workflows/build.yml`):
 
-### Optional guest services
+- `QEMU 9.2 + 3dfx (x86_64)` — custom QEMU tarball  
+- `Build x86_64 ISO (Alpine interim)` — boot ISO  
+- `nq-disk (*)` — host helpers  
+- `Package release zips` — kits above  
 
-- Set `sound.backend = "pipewire"` to start PipeWire and its PulseAudio compatibility service; QEMU
-  uses its supported `pa` audio backend automatically.
-- `[display] backend = "sdl"` (the default) renders the guest directly on the appliance's active
-  KMS/DRM display, with no host desktop or display manager. `none` is only for a deliberately
-  headless VM with another management console.
-- Set `network.mode = "macvtap"` and set `network.bridge_iface` to a physical parent interface for a
-  direct, dedicated VM network attachment. It is not a host-to-guest management link; keep SSH or
-  another management path available.
-- Enable `[shared_folder]` to expose a safe host directory over virtiofs. Linux guests mount it with
-  `mount -t virtiofs native-qemu-share /mnt/shared`.
-- Enable `[docs_server]` only on a guest-facing bridge with an IPv4 address. It serves the bundled
-  docs and resolves `light-docs.local`; `dhcp_range` is opt-in to avoid becoming an unexpected DHCP
-  authority on an existing network.
-- `[[smb_share]]` supports `vm_only` shares bound only to that bridge and `global` shares bound only
-  to `[smb].lan_iface`. Every share requires a password file; never put passwords in `config.toml`.
+## License
 
-### Windows XP VirtIO test image
-
-`/Users/ido/Downloads/WinXpAgent (1).qcow2` passed a read-only QCOW2 integrity check and is suitable
-as the x86_64 test guest. Copy it to the appliance storage selected by `storage = 1`, for example
-`vms/WinXpAgent.qcow2`, then copy the bundled
-`/etc/native-qemu/examples/winxp-virtio.toml` to `/etc/native-qemu/config.toml` (the same source
-profile is also at [`examples/winxp-virtio.toml`](examples/winxp-virtio.toml)).
-
-Windows XP must already have the Red Hat `viostor` (VirtIO block) driver installed to boot from a
-VirtIO disk. If it does not, install that driver while the image is still booted through its existing
-controller before switching to this profile. The initial physical test should retain a keyboard and
-mouse for guest passthrough and keep a separate SSH management path available.
-
-## Contributing / building blocks
-
-- `build/mkimg.native_qemu.sh` — the Alpine `mkimage.sh` profile (package list, kernel flavor, image
-  naming) for this appliance.
-- `agent/` — the Rust launcher built and copied into the ISO overlay during CI.
-- `overlay/` — the default configuration and example lifecycle hooks baked into the ISO.
-- `build/genapkovl-native-qemu.sh` — generates the Alpine overlay (agent, configuration, hostname,
-  and init configuration) baked into the ISO at boot.
-- `.github/workflows/build.yml` — CI: builds both architectures and, on a version tag, publishes a
-  GitHub Release with both ISOs attached.
+See repository license files and third-party notices for QEMU / qemu-3dfx / Alpine packaging as
+applicable.

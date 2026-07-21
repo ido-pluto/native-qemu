@@ -1,0 +1,29 @@
+[package]
+name = "nq-disk"
+version.workspace = true
+edition.workspace = true
+description = "native-qemu USB tool: flash ISO, edit config, manage ext4 data volume (self-contained)"
+license = "MIT"
+
+[[bin]]
+name = "nq-disk"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.28"
+ctrlc = "3"
+ratatui = "0.29"
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+thiserror = "1"
+toml = "0.8"
+walkdir = "2"
+# Bundled lwext4 C library (mkfs + R/W) — no host e2fsprogs required
+ext4-lwext4 = "0.1.2"
+# Pure-Rust GPT partition tables — no host sgdisk required
+gpt = "4"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

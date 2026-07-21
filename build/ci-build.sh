@@ -19,9 +19,29 @@ apk add --no-cache \
 # proper musl binary with no cross-compilation needed at all. Alpine 3.20
 # ships rustc 1.78, which predates a couple of crates' newer minimum
 # versions — see agent/Cargo.toml's indexmap pin.
-( cd /repo/agent && cargo test --locked && cargo build --locked --release )
+#
+# Build via the workspace root so the binary lands at a predictable path
+# (/repo/target/release/...), not /repo/agent/target (workspace members
+# share the root target dir).
+( cd /repo && cargo test -p native-qemu-agent --locked \
+	&& cargo build -p native-qemu-agent --locked --release )
 mkdir -p /repo/overlay/usr/local/bin
-cp /repo/agent/target/release/native-qemu-agent /repo/overlay/usr/local/bin/native-qemu-agent
+agent_bin=""
+for candidate in \
+	/repo/target/release/native-qemu-agent \
+	/repo/agent/target/release/native-qemu-agent; do
+	if [ -x "$candidate" ]; then
+		agent_bin=$candidate
+		break
+	fi
+done
+if [ -z "$agent_bin" ]; then
+	echo "native-qemu: agent binary not found after cargo build" >&2
+	find /repo -name 'native-qemu-agent' -type f 2>/dev/null | head -20 >&2 || true
+	exit 1
+fi
+echo "native-qemu: installing agent from $agent_bin"
+cp "$agent_bin" /repo/overlay/usr/local/bin/native-qemu-agent
 
 # syslinux (BIOS/legacy bootloader) only exists as an x86/x86_64 package —
 # there's no aarch64 build of it at all, so only install it when we're
@@ -59,8 +79,16 @@ cp "${PACKAGER_PRIVKEY}.pub" /etc/apk/keys/
 
 mkdir -p /repo/dist
 cd /tmp/aports/scripts
+
+# Sanitize the image tag. On pull_request, GITHUB_REF_NAME is often "1/merge"
+# (slash creates a nested outdir that xorriso will not mkdir for us).
+IMAGE_TAG="${IMAGE_TAG:-${GITHUB_REF_NAME:-dev}}"
+IMAGE_TAG=$(printf '%s' "$IMAGE_TAG" | tr '/\\' '-' | tr -c 'A-Za-z0-9._-' '-' | sed 's/--*/-/g; s/^-//; s/-$//')
+[ -n "$IMAGE_TAG" ] || IMAGE_TAG=dev
+echo "native-qemu: mkimage tag=$IMAGE_TAG arch=$MATRIX_ARCH"
+
 NATIVE_QEMU_ARCH="$MATRIX_ARCH" ./mkimage.sh \
-	--tag "${GITHUB_REF_NAME:-dev}" \
+	--tag "$IMAGE_TAG" \
 	--outdir /repo/dist \
 	--arch "$MATRIX_ARCH" \
 	--hostkeys \
@@ -72,8 +100,38 @@ NATIVE_QEMU_ARCH="$MATRIX_ARCH" ./mkimage.sh \
 # embedded in the ISO. Inspect the produced artifact itself before CI uploads
 # it: the launcher, config, hooks, and guest docs must all be present, and
 # the selected architecture must carry the matching UEFI firmware package.
-iso="$(find /repo/dist -maxdepth 1 -type f -name '*.iso' -print | head -n 1)"
+iso="$(find /repo/dist -type f -name '*.iso' -print | head -n 1)"
 test -n "$iso"
+# Flatten to dist/*.iso so the workflow upload glob is simple.
+if [ "$(dirname "$iso")" != "/repo/dist" ]; then
+	flat="/repo/dist/$(basename "$iso")"
+	mv "$iso" "$flat"
+	iso=$flat
+	# drop empty nesting left behind
+	find /repo/dist -mindepth 1 -type d -empty -delete 2>/dev/null || true
+fi
+echo "native-qemu: ISO ready at $iso"
+# Stable name for packaging
+cp "$iso" "/repo/dist/native-qemu-${MATRIX_ARCH}.iso"
+iso="/repo/dist/native-qemu-${MATRIX_ARCH}.iso"
+
+# x86_64 only: unpack multi-part 7z guest image and inject as /images/image.qcow2
+# so flash tools can seed the ext4 data volume with a default ReactOS/Win98 disk.
+if [ "$MATRIX_ARCH" = "x86_64" ] && [ -f /repo/assets/image/image.7z.001 ]; then
+	echo "native-qemu: injecting default images/image.qcow2 into ISO"
+	apk add --no-cache p7zip >/dev/null
+	img_tmp="$(mktemp -d)"
+	7z x /repo/assets/image/image.7z.001 -o"$img_tmp" -y >/dev/null
+	# Accept either image.qcow2 or nested path
+	img_file="$(find "$img_tmp" -type f -name 'image.qcow2' | head -n 1)"
+	test -n "$img_file"
+	xorriso -dev "$iso" -boot_image any keep \
+		-map "$img_file" /images/image.qcow2 \
+		-chmod 0444 /images/image.qcow2 -- \
+		>/dev/null
+	rm -rf "$img_tmp"
+fi
+
 echo "native-qemu: inspecting ISO artifact $iso"
 verify_dir="$(mktemp -d)"
 cleanup_verify() { rm -rf "$verify_dir"; }
@@ -88,6 +146,8 @@ tar -tzf "$verify_dir/apkovl.tar.gz" > "$verify_dir/apkovl.contents"
 for required in \
 	usr/local/bin/native-qemu-agent \
 	etc/apk/world \
+	config.toml \
+	CONFIG.TOML \
 	etc/native-qemu/config.toml.example \
 	etc/native-qemu/startup.sh.example \
 	etc/native-qemu/shutdown.sh.example \
@@ -115,3 +175,7 @@ echo "native-qemu: checking embedded firmware package $firmware_package"
 # Alpine's xorriso uses its own `-find` action syntax; `-exec echo` emits
 # every matching ISO pathname, whereas GNU find's `-print` is not valid.
 xorriso -indev "$iso" -find / -type f -name "$firmware_package" -exec echo 2>/dev/null | grep -q .
+if [ "$MATRIX_ARCH" = "x86_64" ] && [ -f /repo/assets/image/image.7z.001 ]; then
+	echo "native-qemu: checking ISO embeds images/image.qcow2"
+	xorriso -indev "$iso" -find /images -type f -name 'image.qcow2' -exec echo 2>/dev/null | grep -q .
+fi

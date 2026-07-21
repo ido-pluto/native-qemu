@@ -45,10 +45,22 @@ pub struct VmConfig {
     pub arch: String,
     #[serde(default = "default_firmware")]
     pub firmware: String,
+    /// QEMU machine type. x86 defaults to q35; aarch64 always uses virt in qemu.rs.
+    #[serde(default = "default_machine")]
+    pub machine: String,
     #[serde(default = "default_memory")]
     pub memory: String,
     #[serde(default = "default_vcpus")]
     pub vcpus: u32,
+    /// Topology: when sockets, cores, and threads are all > 0 they are passed
+    /// to QEMU as `-smp N,sockets=…,cores=…,threads=…`. Zero (the default)
+    /// means omit topology and use vcpus alone.
+    #[serde(default)]
+    pub sockets: u32,
+    #[serde(default)]
+    pub cores: u32,
+    #[serde(default)]
+    pub threads: u32,
     #[serde(default = "default_cpu")]
     pub cpu: String,
     pub disk: DiskConfig,
@@ -58,6 +70,9 @@ fn default_firmware() -> String {
     // value (enforced in qemu.rs). x86_64 defaults to the built-in SeaBIOS;
     // selecting UEFI uses Alpine's bundled OVMF firmware instead.
     "bios".into()
+}
+fn default_machine() -> String {
+    "q35".into()
 }
 fn default_memory() -> String {
     "2G".into()
@@ -155,14 +170,22 @@ pub struct DisplayConfig {
     /// is for deliberately headless guests managed through another channel.
     #[serde(default = "default_display_backend")]
     pub backend: String,
+    /// Guest VGA adapter name used with display.backend = "sdl".
+    /// Config values: VGA | cirrus | std | virtio | virtio-gpu-pci
+    #[serde(default = "default_display_vga")]
+    pub vga: String,
 }
 fn default_display_backend() -> String {
     "sdl".into()
+}
+fn default_display_vga() -> String {
+    "VGA".into()
 }
 impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
             backend: default_display_backend(),
+            vga: default_display_vga(),
         }
     }
 }
@@ -481,6 +504,9 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
 pub fn validate(config: &Config) -> Result<(), String> {
     one_of("vm.arch", &config.vm.arch, &["x86_64", "aarch64"])?;
     one_of("vm.firmware", &config.vm.firmware, &["bios", "uefi"])?;
+    if config.vm.arch == "x86_64" {
+        one_of("vm.machine", &config.vm.machine, &["pc", "q35"])?;
+    }
     positive_size("vm.memory", &config.vm.memory)?;
     if config.vm.vcpus == 0 {
         return Err("vm.vcpus must be at least 1".into());
@@ -514,7 +540,33 @@ pub fn validate(config: &Config) -> Result<(), String> {
         &config.sound.backend,
         &["alsa", "pipewire"],
     )?;
+    // Keep the allow-list broad — QEMU accepts many sound models; we only
+    // reject obvious typos rather than force a short modern-only set.
+    one_of(
+        "sound.model",
+        &config.sound.model,
+        &[
+            "sb16",
+            "virtio-sound-pci",
+            "AC97",
+            "ES1370",
+            "intel-hda",
+            "hda-duplex",
+            "hda-micro",
+            "hda-output",
+            "ich9-intel-hda",
+            "adlib",
+            "gus",
+            "cs4231a",
+            "pcspk",
+        ],
+    )?;
     one_of("display.backend", &config.display.backend, &["sdl", "none"])?;
+    one_of(
+        "display.vga",
+        &config.display.vga,
+        &["VGA", "cirrus", "std", "virtio", "virtio-gpu-pci"],
+    )?;
     one_of(
         "usb.default",
         &config.usb.default,
@@ -656,9 +708,27 @@ mod tests {
             toml::from_str(&bundled_config()).expect("bundled config.toml.example must parse");
         assert_eq!(config.version, 1);
         assert_eq!(config.vm.arch, "x86_64");
+        assert_eq!(config.vm.machine, "q35");
+        assert_eq!(config.display.vga, "VGA");
         assert!(!config.docs_server.enabled);
         assert!(!config.shared_folder.enabled);
         validate(&config).expect("bundled config.toml.example must be valid");
+    }
+
+    #[test]
+    fn reactos_default_config_matches_the_current_schema() {
+        let config: Config = toml::from_str(include_str!("../../assets/default/config.toml"))
+            .expect("assets/default/config.toml must parse");
+        validate(&config).expect("assets/default/config.toml must be valid");
+        assert_eq!(config.vm.machine, "pc");
+        assert_eq!(config.vm.cpu, "pentium3");
+        assert_eq!(config.vm.memory, "512M");
+        assert_eq!(config.vm.sockets, 1);
+        assert_eq!(config.vm.cores, 1);
+        assert_eq!(config.vm.threads, 1);
+        assert_eq!(config.network.model, "rtl8139");
+        assert_eq!(config.display.vga, "cirrus");
+        assert_eq!(config.sound.model, "sb16");
     }
 
     #[test]
@@ -683,6 +753,20 @@ mod tests {
         );
         let config: Config = toml::from_str(&missing_smb_lan).unwrap();
         assert!(validate(&config).unwrap_err().contains("smb.lan_iface"));
+
+        let bad_machine = bundled_config().replace(
+            "machine  = \"q35\"",
+            "machine  = \"not-a-machine\"",
+        );
+        let config: Config = toml::from_str(&bad_machine).unwrap();
+        assert!(validate(&config).unwrap_err().contains("vm.machine"));
+
+        let bad_vga = bundled_config().replace(
+            "vga     = \"VGA\"",
+            "vga     = \"not-a-vga\"",
+        );
+        let config: Config = toml::from_str(&bad_vga).unwrap();
+        assert!(validate(&config).unwrap_err().contains("display.vga"));
     }
 
     #[test]

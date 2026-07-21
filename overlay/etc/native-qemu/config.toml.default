@@ -1,0 +1,62 @@
+# native-qemu default config (ReactOS / Windows 98 SE class guests).
+# Disk file is always image.qcow2 on the USB data volume — replace the file
+# to change the guest without editing this path.
+
+version = 1
+
+[vm]
+arch     = "x86_64"
+firmware = "bios"
+machine  = "pc"
+memory   = "512M"
+cpu      = "pentium3"
+vcpus    = 1
+sockets  = 1
+cores    = 1
+threads  = 1
+
+[vm.disk]
+format  = "qcow2"
+storage = 0
+path    = "image.qcow2"
+bus     = "ide"
+cache   = "writeback"
+discard = "ignore"
+
+[network]
+mode  = "user"
+model = "rtl8139"
+
+[sound]
+enabled = true
+backend = "alsa"
+model   = "sb16"
+
+[display]
+backend = "sdl"
+vga     = "cirrus"
+
+[usb]
+default = "passthrough"
+exclude = []
+hotplug = false
+
+[lifecycle]
+on_guest_shutdown    = "poweroff_host"
+on_guest_crash       = "drop_to_shell"
+on_missing_resource  = "rescue_shell"
+max_restart_attempts = 3
+
+[logging]
+enabled = true
+storage = 0
+path    = "native-qemu/logs"
+
+[docs_server]
+enabled = false
+
+[shared_folder]
+enabled = false
+
+[system]
+hostname = "native-qemu"

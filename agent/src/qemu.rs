@@ -14,6 +14,30 @@ fn binary_for_arch(arch: &str) -> &'static str {
     }
 }
 
+/// Maps config `display.vga` names to the QEMU `-device` name.
+fn qemu_vga_device(vga: &str) -> &str {
+    match vga {
+        "cirrus" => "cirrus-vga",
+        "std" | "VGA" => "VGA",
+        "virtio" | "virtio-gpu-pci" => "virtio-gpu-pci",
+        other => other,
+    }
+}
+
+/// Builds the `-smp` value: full topology when sockets/cores/threads are all
+/// set, otherwise just the vcpu count.
+fn smp_arg(cfg: &Config) -> String {
+    let s = cfg.vm.sockets;
+    let c = cfg.vm.cores;
+    let t = cfg.vm.threads;
+    if s > 0 && c > 0 && t > 0 {
+        let total = s.saturating_mul(c).saturating_mul(t);
+        format!("{total},sockets={s},cores={c},threads={t}")
+    } else {
+        cfg.vm.vcpus.to_string()
+    }
+}
+
 /// Ensures a writable per-VM copy of the AAVMF UEFI variable store exists
 /// (aarch64's "virt" machine always needs UEFI; the template file is
 /// read-only and must not be written to directly or every boot would race
@@ -53,10 +77,11 @@ pub fn build_args(
              is enabled in firmware."
         );
     }
+    // aarch64 always uses the "virt" machine; x86 uses cfg.vm.machine (pc/q35).
     let machine_type = if cfg.vm.arch == "aarch64" {
         "virt"
     } else {
-        "q35"
+        cfg.vm.machine.as_str()
     };
     push(&mut args, "-machine");
     let memory_backend = if virtiofs.is_some() {
@@ -71,19 +96,20 @@ pub fn build_args(
     } else {
         // "host" CPU passthrough only makes sense with KVM; substitute a
         // generic TCG-compatible model instead of failing outright.
-        push(
-            &mut args,
-            if cfg.vm.arch == "aarch64" {
-                "max"
-            } else {
-                "qemu64"
-            },
-        );
+        // Legacy models like pentium3 remain usable under TCG.
+        let tcg_cpu = if cfg.vm.arch == "aarch64" {
+            "max"
+        } else if cfg.vm.cpu == "host" {
+            "qemu64"
+        } else {
+            cfg.vm.cpu.as_str()
+        };
+        push(&mut args, tcg_cpu);
     }
     push(&mut args, "-m");
     push(&mut args, &cfg.vm.memory);
     push(&mut args, "-smp");
-    args.push(cfg.vm.vcpus.to_string());
+    args.push(smp_arg(cfg));
     push(&mut args, "-nodefaults");
     push(&mut args, "-no-user-config");
     // This is an appliance, not a host desktop: SDL talks directly to the
@@ -95,14 +121,14 @@ pub fn build_args(
     if cfg.display.backend == "sdl" {
         push(&mut args, "sdl,gl=off");
         push(&mut args, "-device");
-        push(
-            &mut args,
-            if cfg.vm.arch == "aarch64" {
-                "virtio-gpu-pci"
-            } else {
-                "VGA"
-            },
-        );
+        // aarch64 defaults to virtio-gpu unless the operator explicitly set
+        // a non-default display.vga value.
+        let vga_device = if cfg.vm.arch == "aarch64" && cfg.display.vga == "VGA" {
+            "virtio-gpu-pci"
+        } else {
+            qemu_vga_device(&cfg.display.vga)
+        };
+        push(&mut args, vga_device);
     } else {
         push(&mut args, "none");
     }
@@ -208,6 +234,7 @@ pub fn build_args(
         };
         args.push(audio);
         push(&mut args, "-device");
+        // sb16 (and most other models) take audiodev= as a property.
         args.push(format!("{},audiodev=snd0", cfg.sound.model));
     }
 
@@ -298,5 +325,45 @@ mod tests {
             .windows(2)
             .any(|pair| pair == ["-display", "sdl,gl=off"]));
         assert!(args.windows(2).any(|pair| pair == ["-device", "VGA"]));
+        // Default machine is q35 when not overridden.
+        assert!(args.iter().any(|a| a.starts_with("q35,accel=")));
+    }
+
+    #[test]
+    fn reactos_default_config_builds_legacy_pc_args() {
+        let cfg: Config = toml::from_str(include_str!("../../assets/default/config.toml")).unwrap();
+        let args = build_args(&cfg, Path::new("/tmp/image.qcow2"), &[], None, None).unwrap();
+
+        assert!(
+            args.iter().any(|a| a.starts_with("pc,accel=")),
+            "expected -machine pc, got: {args:?}"
+        );
+        assert!(
+            args.windows(2).any(|pair| pair == ["-cpu", "pentium3"]
+                || (pair[0] == "-cpu" && pair[1] == "pentium3")),
+            "expected -cpu pentium3 (or TCG-safe equivalent), got: {args:?}"
+        );
+        // Under TCG we still pass through non-host CPU models.
+        let cpu_idx = args.iter().position(|a| a == "-cpu").unwrap();
+        assert_eq!(args[cpu_idx + 1], "pentium3");
+
+        assert!(args.windows(2).any(|pair| pair == ["-m", "512M"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-smp", "1,sockets=1,cores=1,threads=1"]));
+        assert!(args
+            .iter()
+            .any(|a| a == "rtl8139,netdev=net0" || a.starts_with("rtl8139,")));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["-device", "cirrus-vga"]),
+            "expected -device cirrus-vga, got: {args:?}"
+        );
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-device", "sb16,audiodev=snd0"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-device", "ide-hd,drive=drive0,bus=ide.0"]));
     }
 }

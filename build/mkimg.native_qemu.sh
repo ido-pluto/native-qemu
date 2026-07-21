@@ -24,6 +24,7 @@ profile_native_qemu() {
 
 	# Deliberately minimal — override profile_base's broader "standard" apks
 	# list rather than extend it, to keep the appliance lightweight.
+	# e2fsprogs: mount/format ext4 data volume (LABEL=native-qemu) on the USB stick.
 	apks="alpine-base busybox openrc doas e2fsprogs kbd-bkeymaps tzdata \
 		dropbear usbutils pciutils openssl"
 

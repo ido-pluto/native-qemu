@@ -18,15 +18,39 @@ use std::fs;
 
 const CONFIG_PATH: &str = "/etc/native-qemu/config.toml";
 const CONFIG_EXAMPLE_PATH: &str = "/etc/native-qemu/config.toml.example";
+const CONFIG_FILENAMES: [&str; 2] = ["config.toml", "CONFIG.TOML"];
+
+fn add_config_path_variants(paths: &mut VecDeque<PathBuf>, base: &Path) {
+    for name in CONFIG_FILENAMES {
+        paths.push_back(base.join(name));
+    }
+}
 
 enum VmResult {
     CleanShutdown,
     Crashed(String),
 }
 
+/// Config search order:
+/// 1. Writable data volume labeled `native-qemu` (mounted on demand)
+/// 2. Boot media under /media/*
+/// 3. Root-level `/config.toml` / `/CONFIG.TOML`
+/// 4. `/etc/native-qemu/config.toml`
+/// 5. `/etc/native-qemu/config.toml.example`
 fn ordered_config_paths() -> VecDeque<PathBuf> {
     let mut paths = VecDeque::new();
 
+    // Prefer the ext4 USB data volume (LABEL=native-qemu) when present.
+    if let Some(data) = storage::ensure_data_volume() {
+        add_config_path_variants(&mut paths, &data);
+    }
+
+    for media in storage::media_mounts() {
+        add_config_path_variants(&mut paths, &media);
+    }
+
+    // Also scan /proc/mounts directly for any /media/* we might have missed
+    // (media_mounts already covers this; kept for resilience if mounts change).
     let mounts = fs::read_to_string("/proc/mounts").ok();
     if let Some(mounts) = mounts {
         for line in mounts.lines() {
@@ -35,16 +59,18 @@ fn ordered_config_paths() -> VecDeque<PathBuf> {
             let mountpoint = fields.next();
             if let Some(mountpoint) = mountpoint {
                 if mountpoint.starts_with("/media/") {
-                    let candidate = Path::new(mountpoint).join("config.toml");
-                    if candidate.exists() {
-                        paths.push_back(candidate);
+                    let base = Path::new(mountpoint);
+                    // Avoid duplicates already added above.
+                    let already = paths.iter().any(|p| p.parent() == Some(base));
+                    if !already {
+                        add_config_path_variants(&mut paths, base);
                     }
                 }
             }
         }
     }
 
-    paths.push_back(Path::new("/config.toml").to_path_buf());
+    add_config_path_variants(&mut paths, Path::new("/"));
     paths.push_back(Path::new(CONFIG_PATH).to_path_buf());
     paths.push_back(Path::new(CONFIG_EXAMPLE_PATH).to_path_buf());
     paths
@@ -62,7 +88,7 @@ fn load_config() -> Result<(PathBuf, config::Config), String> {
             }
         }
     }
-    Err("no valid config.toml found in fallback chain (media/config.toml, /config.toml, /etc/native-qemu/config.toml, /etc/native-qemu/config.toml.example)".into())
+    Err("no valid config.toml found in fallback chain (data volume LABEL=native-qemu, media/config.toml, media/CONFIG.TOML, /config.toml, /CONFIG.TOML, /etc/native-qemu/config.toml, /etc/native-qemu/config.toml.example)".into())
 }
 
 fn main() {
@@ -177,6 +203,25 @@ fn run_one_vm_lifecycle(cfg: &config::Config) -> Result<VmResult, String> {
         )
     })?;
     let disk_path = storage_dir.join(&cfg.vm.disk.path);
+    if !disk_path.exists() {
+        // First-boot convenience: copy images/image.qcow2 from the ISO boot
+        // media onto the data volume path once, then continue.
+        match storage::seed_disk_from_boot_media(&disk_path) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(format!(
+                    "configured disk does not exist: {} (and no seed at images/image.qcow2 on boot media)",
+                    disk_path.display()
+                ));
+            }
+            Err(e) => {
+                return Err(format!(
+                    "configured disk does not exist: {}; failed to seed from boot media: {e}",
+                    disk_path.display()
+                ));
+            }
+        }
+    }
     if !disk_path.exists() {
         return Err(format!(
             "configured disk does not exist: {}",

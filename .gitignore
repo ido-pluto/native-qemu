@@ -1,8 +1,11 @@
 .DS_Store
 dist/
+.cache/
 *.iso
 *.img
 *.qcow2
-.DS_Store
+!assets/**/*.qcow2
 agent/target/
+target/
 overlay/usr/local/bin/native-qemu-agent
+tools/nq-disk/target/
