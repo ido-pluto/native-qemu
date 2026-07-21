@@ -1,5 +1,6 @@
 .DS_Store
 dist/
+.cache/
 *.iso
 *.img
 *.qcow2

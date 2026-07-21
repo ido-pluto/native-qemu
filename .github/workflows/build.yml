@@ -1,8 +1,12 @@
 name: Build ISOs
 
-# Builds the native-qemu appliance ISO for x86_64 and aarch64 using Alpine's
-# own mkimage.sh tooling, multi-platform nq-disk host helpers, and release
-# zips that pair each helper with the ISOs.
+# native-qemu product track (locked decisions):
+#   - Void Linux **glibc** appliance (x86_64 only) with CI-built QEMU 9.2 + qemu-3dfx
+#   - Multi-platform nq-disk host helpers + release zips
+#
+# Phase 0: build-qemu-3dfx produces a prefix tarball.
+# Phase 1: Void ISO replaces Alpine (void-iso.sh); until then x86_64 Alpine ISO
+#          remains so nq-disk packages still ship a bootable image.
 
 on:
   push:
@@ -13,8 +17,57 @@ on:
 
 env:
   ALPINE_VERSION: "3.20"
+  QEMU_VERSION: "9.2.2"
+  # kjliew/qemu-3dfx pin (update deliberately with patch bumps)
+  QEMU_3DFX_REF: "eefd567ddc7d718ab5848f9d04df0dfd40776cf1"
 
 jobs:
+  # ---- QEMU 9.2 + 3dfx (glibc), x86_64 softmmu only ------------------------
+  build-qemu-3dfx:
+    name: QEMU 9.2 + 3dfx (x86_64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential git rsync curl ca-certificates \
+            ninja-build pkg-config python3 python3-venv python3-setuptools \
+            libglib2.0-dev libpixman-1-dev libsdl2-dev libepoxy-dev \
+            libslirp-dev libfdt-dev zlib1g-dev libzstd-dev \
+            flex bison
+
+      - name: Cache QEMU sources + build
+        uses: actions/cache@v5
+        with:
+          path: |
+            .cache/qemu-3dfx-build
+          key: qemu-3dfx-${{ env.QEMU_VERSION }}-${{ env.QEMU_3DFX_REF }}-${{ hashFiles('build/qemu-3dfx.sh') }}
+          restore-keys: |
+            qemu-3dfx-${{ env.QEMU_VERSION }}-${{ env.QEMU_3DFX_REF }}-
+            qemu-3dfx-${{ env.QEMU_VERSION }}-
+
+      - name: Build and pack qemu-3dfx
+        env:
+          QEMU_VERSION: ${{ env.QEMU_VERSION }}
+          QEMU_3DFX_REF: ${{ env.QEMU_3DFX_REF }}
+        run: |
+          set -euo pipefail
+          chmod +x build/qemu-3dfx.sh
+          ./build/qemu-3dfx.sh --pack
+
+      - name: Upload qemu-3dfx tarball
+        uses: actions/upload-artifact@v7
+        with:
+          name: qemu-3dfx-x86_64
+          path: dist/qemu-3dfx-x86_64.tar.gz
+          if-no-files-found: error
+
   nq-disk:
     name: nq-disk (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
@@ -22,7 +75,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Apple Silicon only — Intel Mac host builds are not required.
           - target: aarch64-apple-darwin
             runner: macos-14
             platform: macos-arm64
@@ -73,17 +125,11 @@ jobs:
           path: dist/nq-disk/${{ matrix.platform }}/*
           if-no-files-found: error
 
+  # Temporary: Alpine x86_64 ISO until Void glibc builder (void-iso.sh) is ready.
+  # Product target is Void + qemu-3dfx; aarch64 Alpine is no longer built.
   build:
-    name: Build ${{ matrix.arch }} ISO
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86_64
-            runner: ubuntu-latest
-          - arch: aarch64
-            runner: ubuntu-24.04-arm
+    name: Build x86_64 ISO (Alpine interim)
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -92,8 +138,7 @@ jobs:
 
       - name: Build ISO in Alpine container
         env:
-          MATRIX_ARCH: ${{ matrix.arch }}
-          # Prefer a slash-free tag (PR refs are "N/merge" which breaks outdirs).
+          MATRIX_ARCH: x86_64
           IMAGE_TAG: ${{ github.event_name == 'pull_request' && format('pr{0}', github.event.pull_request.number) || github.ref_name }}
         run: |
           mkdir -p dist
@@ -106,15 +151,13 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: native-qemu-${{ matrix.arch }}
-          path: dist/native-qemu-${{ matrix.arch }}.iso
+          name: native-qemu-x86_64
+          path: dist/native-qemu-x86_64.iso
           if-no-files-found: error
 
-  # Pair each host helper with the ISOs into a downloadable zip.
-  # Runs on every successful build (PR / main / manual / tag).
   package:
     name: Package release zips
-    needs: [build, nq-disk]
+    needs: [build, nq-disk, build-qemu-3dfx]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -128,11 +171,10 @@ jobs:
           mkdir -p dist/release
 
           iso_x64=$(find artifacts/native-qemu-x86_64 -name '*.iso' | head -n1)
-          iso_arm=$(find artifacts/native-qemu-aarch64 -name '*.iso' | head -n1)
           test -n "$iso_x64"
-          test -n "$iso_arm"
+          qemu_tb=$(find artifacts/qemu-3dfx-x86_64 -name 'qemu-3dfx-x86_64.tar.gz' | head -n1)
+          test -n "$qemu_tb"
 
-          # platform folder name → zip suffix
           pack_one() {
             local platform="$1"
             local dir="artifacts/nq-disk-${platform}"
@@ -142,39 +184,33 @@ jobs:
 
             local zipdir
             zipdir=$(mktemp -d)
-            # Friendly binary name inside the zip
             if [[ "$bin" == *.exe ]]; then
               cp "$bin" "$zipdir/nq-disk.exe"
             else
               cp "$bin" "$zipdir/nq-disk"
               chmod +x "$zipdir/nq-disk"
             fi
-            # Both boot ISOs — host OS is independent of target machine arch
             cp "$iso_x64" "$zipdir/native-qemu-x86_64.iso"
-            cp "$iso_arm" "$zipdir/native-qemu-aarch64.iso"
+            # Ship custom QEMU next to the kit for testing / future Void bake-in.
+            cp "$qemu_tb" "$zipdir/qemu-3dfx-x86_64.tar.gz"
 
             cat > "$zipdir/README.txt" <<EOF
           native-qemu — flash kit (${platform})
           =====================================
 
           Contents
-            nq-disk[.exe]              interactive host helper (this platform)
-            native-qemu-x86_64.iso     boot ISO for Intel/AMD PCs
-            native-qemu-aarch64.iso    boot ISO for ARM64 machines
+            nq-disk[.exe]                 host helper (this platform)
+            native-qemu-x86_64.iso        boot ISO (interim Alpine; Void+3dfx next)
+            qemu-3dfx-x86_64.tar.gz       QEMU 9.2 + 3dfx/MESA (glibc), prefix tree
 
           Quick start
-            1. Run nq-disk as root / Administrator (macOS: sudo ./nq-disk).
-            2. Flash ISO → pick the USB stick (system disks are hidden).
-               Choose the ISO that matches the machine you will boot, not this PC.
-            3. Edit config.toml on the USB data volume (completion + validate).
-            4. Load / replace image.qcow2 if needed (path is always image.qcow2).
-            5. Unmount, move the stick to the target, boot it.
+            1. sudo ./nq-disk   (macOS/Linux) or Run as administrator (Windows)
+            2. Flash ISO to USB, edit config, load image.qcow2, unmount, boot target.
 
-          Keys in the config editor
-            Tab / Ctrl+Space   value completions
-            Enter              replace selected value (menu closes)
-            ↑ on first item / ↓ on last item   leave menu + move line
-            ^O                 save & exit   ·   ^C exit   ·   ^Z undo
+          QEMU 3dfx tarball
+            Extract on a glibc Linux host (or the future Void appliance rootfs):
+              tar -C /usr/local -xzf qemu-3dfx-x86_64.tar.gz --strip-components=2
+            Or inspect: tar tzf qemu-3dfx-x86_64.tar.gz | head
 
           Project: https://github.com/${{ github.repository }}
           EOF
@@ -190,9 +226,8 @@ jobs:
           pack_one linux-aarch64
           pack_one windows-x86_64
 
-          # Also keep raw ISOs next to the zips for convenience
           cp "$iso_x64" dist/release/native-qemu-x86_64.iso
-          cp "$iso_arm" dist/release/native-qemu-aarch64.iso
+          cp "$qemu_tb" dist/release/qemu-3dfx-x86_64.tar.gz
 
           echo "---- dist/release ----"
           ls -lah dist/release/
@@ -227,7 +262,7 @@ jobs:
           body: |
             ## Downloads
 
-            Pick the zip for the **computer you use to flash the USB** (not the machine that will boot it):
+            Pick the zip for the **computer you use to flash the USB**:
 
             | Host | Zip |
             |---|---|
@@ -236,5 +271,7 @@ jobs:
             | Linux ARM64 | `native-qemu-linux-aarch64.zip` |
             | Windows x86_64 | `native-qemu-windows-x86_64.zip` |
 
-            Each zip includes `nq-disk`, both boot ISOs (`x86_64` + `aarch64`), and a short README.
-            Raw ISOs are also attached for advanced use.
+            Each zip includes `nq-disk`, the x86_64 boot ISO, and **`qemu-3dfx-x86_64.tar.gz`**
+            (QEMU 9.2 + [qemu-3dfx](https://github.com/kjliew/qemu-3dfx) MESA/Glide pass-through, glibc).
+
+            Appliance base is migrating from Alpine → **Void Linux glibc** with this QEMU baked in.
