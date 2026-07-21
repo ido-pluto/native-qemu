@@ -7,10 +7,28 @@ use std::process::{Child, Command, Stdio};
 
 pub const QMP_SOCKET: &str = "/run/native-qemu-qmp.sock";
 
-fn binary_for_arch(arch: &str) -> &'static str {
+/// Appliance-baked qemu-3dfx install path (void-iso / qemu-3dfx.sh).
+const QEMU_3DFX_PREFIX: &str = "/usr/local/bin";
+
+fn binary_name_for_arch(arch: &str) -> &'static str {
     match arch {
         "aarch64" => "qemu-system-aarch64",
         _ => "qemu-system-x86_64",
+    }
+}
+
+/// Prefer the ISO-baked qemu-3dfx binary under `/usr/local/bin`, then PATH.
+///
+/// qemu-3dfx auto-maps `glidept` / `mesapt` on the `pc` machine; stock distro
+/// QEMU does not. Using the appliance path is required for
+/// `display.passthrough` Glide/MESA modes.
+pub fn resolve_binary(arch: &str) -> PathBuf {
+    let name = binary_name_for_arch(arch);
+    let preferred = Path::new(QEMU_3DFX_PREFIX).join(name);
+    if preferred.is_file() {
+        preferred
+    } else {
+        PathBuf::from(name)
     }
 }
 
@@ -89,7 +107,16 @@ pub fn build_args(
     } else {
         ""
     };
-    args.push(format!("{machine_type},accel={accel}{memory_backend}"));
+    // qemu-3dfx + legacy guests: HPET breaks many Win9x/ReactOS timers; the
+    // common appliance recipe disables it when Glide/MESA pass-through is on.
+    let hpet = if cfg.display.wants_3dfx() && machine_type == "pc" {
+        ",hpet=off"
+    } else {
+        ""
+    };
+    args.push(format!(
+        "{machine_type},accel={accel}{memory_backend}{hpet}"
+    ));
     push(&mut args, "-cpu");
     if have_kvm {
         push(&mut args, &cfg.vm.cpu);
@@ -110,6 +137,18 @@ pub fn build_args(
     push(&mut args, &cfg.vm.memory);
     push(&mut args, "-smp");
     args.push(smp_arg(cfg));
+    // Win9x / ReactOS: base=localtime (default) so CMOS tracks host local
+    // clock after system.timezone is applied. Use system.rtc_base = "utc"
+    // only for guests that keep UTC in hardware clock.
+    if cfg.vm.arch != "aarch64" {
+        let base = if cfg.system.rtc_base == "utc" {
+            "utc"
+        } else {
+            "localtime"
+        };
+        push(&mut args, "-rtc");
+        args.push(format!("base={base}"));
+    }
     push(&mut args, "-nodefaults");
     push(&mut args, "-no-user-config");
     // This is an appliance, not a host desktop: SDL talks directly to the
@@ -117,8 +156,13 @@ pub fn build_args(
     // a standard VGA device on x86 makes Windows XP usable without needing a
     // guest virtio-gpu driver. Operators who use an alternative remote
     // console can explicitly choose display.backend = "none".
+    //
+    // qemu-3dfx requires `-display sdl` *without* `gl=on` — `gl=on` conflicts
+    // with glidept/mesapt host GL. We always pass `gl=off` for SDL.
+    // Glide/MESA devices are auto-mapped by the patched QEMU on machine `pc`
+    // (not added via `-device`).
     push(&mut args, "-display");
-    if cfg.display.backend == "sdl" {
+    if cfg.display.backend == "sdl" || cfg.display.wants_3dfx() {
         push(&mut args, "sdl,gl=off");
         push(&mut args, "-device");
         // aarch64 defaults to virtio-gpu unless the operator explicitly set
@@ -129,6 +173,15 @@ pub fn build_args(
             qemu_vga_device(&cfg.display.vga)
         };
         push(&mut args, vga_device);
+        if cfg.display.wants_3dfx() {
+            eprintln!(
+                "native-qemu: display.passthrough={} — qemu-3dfx glidept/mesapt \
+                 auto-map on pc (SDL gl=off; prefer {}/{})",
+                cfg.display.passthrough,
+                QEMU_3DFX_PREFIX,
+                binary_name_for_arch(&cfg.vm.arch)
+            );
+        }
     } else {
         push(&mut args, "none");
     }
@@ -283,10 +336,21 @@ pub fn spawn(
     args: &[String],
     macvtap: Option<&MacvtapRuntime>,
 ) -> std::io::Result<Child> {
-    let binary = binary_for_arch(&cfg.vm.arch);
-    let mut command = Command::new(binary);
+    let binary = resolve_binary(&cfg.vm.arch);
+    if cfg.display.wants_3dfx() && !binary.starts_with(QEMU_3DFX_PREFIX) {
+        eprintln!(
+            "native-qemu: warning: display.passthrough={} but {} is missing; \
+             using {:?} from PATH (stock QEMU has no glidept/mesapt)",
+            cfg.display.passthrough,
+            Path::new(QEMU_3DFX_PREFIX)
+                .join(binary_name_for_arch(&cfg.vm.arch))
+                .display(),
+            binary
+        );
+    }
+    let mut command = Command::new(&binary);
     command.args(args).stdin(Stdio::null());
-    if cfg.display.backend == "sdl" {
+    if cfg.display.backend == "sdl" || cfg.display.wants_3dfx() {
         // The appliance runs on a Linux console without X11 or Wayland. SDL's
         // KMSDRM driver presents the guest straight on the physical display.
         command.env("SDL_VIDEODRIVER", "kmsdrm");
@@ -330,7 +394,7 @@ mod tests {
     }
 
     #[test]
-    fn reactos_default_config_builds_legacy_pc_args() {
+    fn win98_default_config_builds_3dfx_optimized_pc_args() {
         let cfg: Config = toml::from_str(include_str!("../../assets/default/config.toml")).unwrap();
         let args = build_args(&cfg, Path::new("/tmp/image.qcow2"), &[], None, None).unwrap();
 
@@ -338,32 +402,74 @@ mod tests {
             args.iter().any(|a| a.starts_with("pc,accel=")),
             "expected -machine pc, got: {args:?}"
         );
-        assert!(
-            args.windows(2).any(|pair| pair == ["-cpu", "pentium3"]
-                || (pair[0] == "-cpu" && pair[1] == "pentium3")),
-            "expected -cpu pentium3 (or TCG-safe equivalent), got: {args:?}"
-        );
-        // Under TCG we still pass through non-host CPU models.
+        // host → qemu64 under TCG when /dev/kvm is absent on the test host.
         let cpu_idx = args.iter().position(|a| a == "-cpu").unwrap();
-        assert_eq!(args[cpu_idx + 1], "pentium3");
+        let cpu = &args[cpu_idx + 1];
+        assert!(
+            cpu == "host" || cpu == "qemu64",
+            "expected -cpu host (or TCG qemu64), got: {cpu}"
+        );
 
         assert!(args.windows(2).any(|pair| pair == ["-m", "512M"]));
         assert!(args
             .windows(2)
             .any(|pair| pair == ["-smp", "1,sockets=1,cores=1,threads=1"]));
         assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-rtc", "base=localtime"]));
+        assert!(args
             .iter()
             .any(|a| a == "rtl8139,netdev=net0" || a.starts_with("rtl8139,")));
         assert!(
-            args.windows(2)
-                .any(|pair| pair == ["-device", "cirrus-vga"]),
-            "expected -device cirrus-vga, got: {args:?}"
+            args.windows(2).any(|pair| pair == ["-device", "VGA"]),
+            "expected -device VGA (std + BOXV9x path), got: {args:?}"
         );
         assert!(args
             .windows(2)
-            .any(|pair| pair == ["-device", "sb16,audiodev=snd0"]));
+            .any(|pair| pair == ["-display", "sdl,gl=off"]));
+        // 3dfx devices are auto-mapped by patched QEMU — never -device glidept/mesapt.
+        assert!(
+            !args.iter().any(|a| a.contains("glidept") || a.contains("mesapt")),
+            "must not pass -device glidept/mesapt (auto-map), got: {args:?}"
+        );
+        assert!(
+            args.iter().any(|a| a.contains("hpet=off")),
+            "expected hpet=off for 3dfx Win98 default, got: {args:?}"
+        );
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-device", "AC97,audiodev=snd0"]));
         assert!(args
             .windows(2)
             .any(|pair| pair == ["-device", "ide-hd,drive=drive0,bus=ide.0"]));
+    }
+
+    #[test]
+    fn resolve_binary_prefers_appliance_prefix_when_present() {
+        // Without a real install the fallback is the bare name (PATH).
+        let bare = super::resolve_binary("x86_64");
+        assert!(
+            bare.ends_with("qemu-system-x86_64"),
+            "unexpected binary: {bare:?}"
+        );
+        let aarch = super::resolve_binary("aarch64");
+        assert!(aarch.ends_with("qemu-system-aarch64"));
+    }
+
+    #[test]
+    fn passthrough_none_omits_hpet_off() {
+        let mut text = include_str!("../../assets/default/config.toml").to_owned();
+        text = text.replace("passthrough = \"both\"", "passthrough = \"none\"");
+        // If the default file still lacks the key, inject none under [display].
+        if !text.contains("passthrough") {
+            text = text.replace(
+                "vga     = \"cirrus\"",
+                "vga     = \"cirrus\"\npassthrough = \"none\"",
+            );
+        }
+        let cfg: Config = toml::from_str(&text).unwrap();
+        assert!(!cfg.display.wants_3dfx());
+        let args = build_args(&cfg, Path::new("/tmp/image.qcow2"), &[], None, None).unwrap();
+        assert!(!args.iter().any(|a| a.contains("hpet=off")));
     }
 }

@@ -116,7 +116,7 @@ cp "$iso" "/repo/dist/native-qemu-${MATRIX_ARCH}.iso"
 iso="/repo/dist/native-qemu-${MATRIX_ARCH}.iso"
 
 # x86_64 only: unpack multi-part 7z guest image and inject as /images/image.qcow2
-# so flash tools can seed the ext4 data volume with a default ReactOS/Win98 disk.
+# so flash tools can seed the ext4 data volume with a default Win98/ReactOS disk.
 if [ "$MATRIX_ARCH" = "x86_64" ] && [ -f /repo/assets/image/image.7z.001 ]; then
 	echo "native-qemu: injecting default images/image.qcow2 into ISO"
 	apk add --no-cache p7zip >/dev/null

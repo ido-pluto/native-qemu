@@ -46,8 +46,13 @@ backend = "alsa"          # alsa | pipewire (starts PipeWire + pipewire-pulse)
 model   = "virtio-sound-pci"  # virtio-sound-pci | sb16 | AC97 | ES1370 | intel-hda | …
 
 [display]
-backend = "sdl"           # sdl = direct physical KMS/DRM guest display | none = deliberately headless
-vga     = "VGA"           # VGA | cirrus | std | virtio | virtio-gpu-pci
+backend     = "sdl"       # sdl = direct physical KMS/DRM guest display | none = deliberately headless
+vga         = "VGA"       # VGA | cirrus | std | virtio | virtio-gpu-pci
+# qemu-3dfx host pass-through (patched QEMU at /usr/local/bin only).
+# none | glide | mesa | both — non-none needs backend=sdl, machine=pc, arch=x86_64.
+# Host-side glide|mesa|both are equivalent today (prefer both); guest wrappers pick API.
+# Do not use sdl,gl=on; agent always passes sdl,gl=off. Devices auto-map (not -device).
+passthrough = "none"
 
 [usb]
 default = "passthrough"   # passthrough (default: pass through everything not excluded) | host-only
@@ -111,5 +116,11 @@ vm_iface = "br0"
 # lan_iface = "eth0"              # required only for scope = "global"
 
 [system]
+# Host timezone applied before QEMU. Guest CMOS uses system.rtc_base (localtime).
+# auto = detect /etc/timezone or /etc/localtime; if none → America/Chicago (Texas Central).
+# Any zone from /usr/share/zoneinfo is valid, e.g.:
+#   America/Chicago (Texas)  |  Asia/Jerusalem  |  Europe/London  |  UTC  | …
+timezone = "auto"
+rtc_base = "localtime"    # localtime (Win9x/ReactOS) | utc
 # ssh_enabled        = true
 # ssh_authorized_key = "ssh-ed25519 AAAA..."

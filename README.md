@@ -13,7 +13,7 @@ Use [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) before publishing a tagged rele
 
 Active development. The appliance boots into `native-qemu-agent`, which loads `config.toml` from the
 USB data volume (`LABEL=native-qemu`) and launches a config-driven QEMU VM (legacy PC profile for
-ReactOS / Windows 98 SE class guests by default).
+Windows 98 SE first, ReactOS-compatible; qemu-3dfx tuned).
 
 **Product track (current CI):**
 
@@ -106,6 +106,16 @@ tar tzf qemu-3dfx-x86_64.tar.gz | grep qemu-system-x86_64
 Guest **Glide/OpenGL wrappers** (Windows DLLs from qemu-3dfx) are installed **inside the guest OS**,
 not by the host flash tool. See the upstream qemu-3dfx README.
 
+Host side, `native-qemu-agent` prefers **`/usr/local/bin/qemu-system-x86_64`**, forces
+**`-display sdl,gl=off`** (never `gl=on` — conflicts with 3dfx), and uses a
+**Windows 98 SE–first** default profile aligned with the [qemu-3dfx wiki](https://github.com/kjliew/qemu-3dfx/wiki):
+`machine=pc`, `cpu=host`, `hpet=off`, `vga=VGA`, `AC97`, `rtl8139`, `passthrough=both`,
+`-rtc base=localtime`. That set also works for **ReactOS**.  
+`system.timezone = "auto"` sets the host zone (detect, else **America/Chicago** / Texas Central)
+so the guest CMOS follows local time. Patched QEMU auto-maps `glidept` / `mesapt` on `pc`;
+the agent does not pass `-device glidept`. Set `passthrough = "none"` for modern guests
+that do not need 3dfx.
+
 ## Booting
 
 1. Plug the stick into the **x86_64** target machine and open the firmware boot menu.  
@@ -120,8 +130,8 @@ On the appliance, the agent resolves config from the data volume / boot media / 
 (see agent docs and [plan.md](plan.md)). Persistence for the stick is the **ext4 data volume**, not
 Alpine `lbu` (that path is interim-only).
 
-Default profile targets **legacy PC** guests (e.g. `machine = "pc"`, IDE, Cirrus) suitable for
-ReactOS / Win98 SE class systems; always keep the guest disk filename **`image.qcow2`**.
+Default profile targets **Windows 98 SE + 3dfx** (`machine=pc`, IDE, std VGA, AC97, rtl8139);
+ReactOS uses the same devices. Always keep the guest disk filename **`image.qcow2`**.
 
 ## Development
 

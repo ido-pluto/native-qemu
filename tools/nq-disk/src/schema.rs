@@ -39,8 +39,8 @@ pub const SECTIONS: &[Section] = &[
             },
             Field {
                 key: "cpu",
-                values: &["pentium3", "host", "qemu64", "max"],
-                doc: "QEMU CPU model",
+                values: &["host", "pentium3", "qemu64", "max"],
+                doc: "host = best 3dfx/KVM (Win98); pentium3 = stricter legacy",
             },
             Field {
                 key: "vcpus",
@@ -109,8 +109,8 @@ pub const SECTIONS: &[Section] = &[
             },
             Field {
                 key: "model",
-                values: &["rtl8139", "e1000", "virtio-net-pci"],
-                doc: "rtl8139 for Win98/ReactOS",
+                values: &["rtl8139", "pcnet", "e1000", "virtio-net-pci"],
+                doc: "rtl8139 default (Win98+ReactOS); pcnet also OK — NIC ≠ 3dfx FPS",
             },
             Field {
                 key: "bridge_iface",
@@ -134,8 +134,8 @@ pub const SECTIONS: &[Section] = &[
             },
             Field {
                 key: "model",
-                values: &["sb16", "virtio-sound-pci", "AC97", "ES1370"],
-                doc: "sb16 for Win98/ReactOS",
+                values: &["AC97", "sb16", "virtio-sound-pci", "ES1370"],
+                doc: "AC97 best for Win98+3dfx; sb16 for older DOS-style",
             },
         ],
     },
@@ -149,8 +149,13 @@ pub const SECTIONS: &[Section] = &[
             },
             Field {
                 key: "vga",
-                values: &["cirrus", "std", "VGA", "virtio-gpu-pci"],
-                doc: "cirrus for Win98/ReactOS",
+                values: &["VGA", "cirrus", "std", "virtio-gpu-pci"],
+                doc: "VGA+BOXV9x for Win98 3dfx; cirrus if you need inbox 2D only",
+            },
+            Field {
+                key: "passthrough",
+                values: &["both", "glide", "mesa", "none"],
+                doc: "both preferred; glide|mesa|both same host flags (guest picks API); needs machine=pc",
             },
         ],
     },
@@ -196,6 +201,19 @@ pub const SECTIONS: &[Section] = &[
                 key: "hostname",
                 values: &["native-qemu"],
                 doc: "Appliance hostname",
+            },
+            Field {
+                key: "timezone",
+                // Values come from the host zoneinfo tree at runtime (see
+                // timezone_suggestions) — every valid Linux IANA zone, e.g.
+                // Asia/Jerusalem, Israel, America/Chicago, UTC, …
+                values: &["auto"],
+                doc: "auto | any Linux IANA zone; Texas first (America/Chicago); Israel = Asia/Jerusalem",
+            },
+            Field {
+                key: "rtc_base",
+                values: &["localtime", "utc"],
+                doc: "localtime for Win98/ReactOS CMOS clock",
             },
             Field {
                 key: "ssh_enabled",
@@ -296,6 +314,11 @@ pub fn suggestions(ctx: &CompleteContext) -> Vec<Suggestion> {
             section,
             key,
             prefix,
+        } if section == "system" && key == "timezone" => timezone_suggestions(prefix),
+        CompleteContext::Value {
+            section,
+            key,
+            prefix,
         } => SECTIONS
             .iter()
             .filter(|s| s.name == section)
@@ -324,6 +347,193 @@ pub fn suggestions(ctx: &CompleteContext) -> Vec<Suggestion> {
             .collect(),
         CompleteContext::Unknown => Vec::new(),
     }
+}
+
+/// Completions for `system.timezone`: `auto` plus every zone under
+/// `/usr/share/zoneinfo` (full Linux/IANA set on this machine), including
+/// Israel (`Asia/Jerusalem`, legacy `Israel`), US zones, UTC, etc.
+fn timezone_suggestions(prefix: &str) -> Vec<Suggestion> {
+    let doc = "auto | any Linux IANA zone from /usr/share/zoneinfo";
+    let p = prefix.to_ascii_lowercase();
+    let mut out = Vec::new();
+
+    let mut push = |label: &str| {
+        let ll = label.to_ascii_lowercase();
+        if p.is_empty() || ll.starts_with(&p) || ll.contains(&p) {
+            out.push(Suggestion {
+                insert: format!("\"{label}\""),
+                label: label.to_string(),
+                doc: doc.to_string(),
+            });
+        }
+    };
+
+    push("auto");
+    for z in list_system_timezones() {
+        push(&z);
+    }
+    // Cap popup size when prefix is empty (full list is 500+ entries).
+    // Order: auto → Texas first among pins → other common zones (one name per
+    // region; Israel = Asia/Jerusalem only, not the legacy "Israel" alias).
+    if p.is_empty() && out.len() > 80 {
+        let priority = [
+            "auto",
+            "America/Chicago", // Texas Central (default auto fallback)
+            "America/Denver",  // west Texas (El Paso)
+            "America/New_York",
+            "America/Los_Angeles",
+            "UTC",
+            "Asia/Jerusalem",
+            "Europe/London",
+            "Europe/Berlin",
+            "Europe/Paris",
+            "Asia/Tokyo",
+            "Australia/Sydney",
+        ];
+        let mut kept: Vec<Suggestion> = Vec::new();
+        for name in priority {
+            if let Some(s) = out.iter().find(|s| s.label == name) {
+                kept.push(s.clone());
+            }
+        }
+        for s in out {
+            if kept.len() >= 80 {
+                break;
+            }
+            // Drop legacy "Israel" alias — prefer Asia/Jerusalem only.
+            if s.label == "Israel" {
+                continue;
+            }
+            if !kept.iter().any(|k| k.label == s.label) {
+                kept.push(s);
+            }
+        }
+        out = kept;
+    } else {
+        // Filtered list: hide legacy Israel alias when Jerusalem is present.
+        if out.iter().any(|s| s.label == "Asia/Jerusalem") {
+            out.retain(|s| s.label != "Israel");
+        }
+    }
+    out
+}
+
+/// Walk host zoneinfo (same tree Linux uses). Skips posix/right copies and
+/// metadata files. Returns sorted unique zone names (e.g. `Asia/Jerusalem`).
+pub fn list_system_timezones() -> Vec<String> {
+    let root = std::path::Path::new("/usr/share/zoneinfo");
+    if !root.is_dir() {
+        return fallback_timezone_list();
+    }
+    let mut zones = Vec::new();
+    collect_zones(root, root, &mut zones);
+    zones.sort();
+    zones.dedup();
+    if zones.is_empty() {
+        return fallback_timezone_list();
+    }
+    zones
+}
+
+fn collect_zones(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for ent in entries.flatten() {
+        let name = ent.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.')
+            || name == "posix"
+            || name == "right"
+            || name == "+VERSION"
+            || name.ends_with(".tab")
+            || name.ends_with(".zi")
+            || name == "leapseconds"
+            || name == "tzdata.zi"
+            || name == "Factory"
+        {
+            continue;
+        }
+        let path = ent.path();
+        let meta = match ent.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if meta.is_dir() {
+            collect_zones(root, &path, out);
+            continue;
+        }
+        // Regular file or symlink to zone data.
+        if !(meta.is_file() || meta.is_symlink()) {
+            continue;
+        }
+        // Skip huge non-zone blobs if any.
+        if let Ok(m) = ent.metadata() {
+            if m.len() > 512 * 1024 {
+                continue;
+            }
+        }
+        if let Ok(rel) = path.strip_prefix(root) {
+            let z = rel.to_string_lossy().replace('\\', "/");
+            if !z.is_empty() && !z.contains("..") {
+                out.push(z);
+            }
+        }
+    }
+}
+
+/// Used when zoneinfo is missing (minimal host / incomplete image).
+/// Texas Central first after auto (auto is separate). One Israel name only.
+fn fallback_timezone_list() -> Vec<String> {
+    [
+        "America/Chicago", // Texas Central
+        "America/Denver",  // west Texas
+        "America/New_York",
+        "America/Los_Angeles",
+        "UTC",
+        "Asia/Jerusalem",
+        "America/Phoenix",
+        "America/Anchorage",
+        "America/Toronto",
+        "America/Mexico_City",
+        "America/Sao_Paulo",
+        "Europe/London",
+        "Europe/Berlin",
+        "Europe/Paris",
+        "Europe/Moscow",
+        "Europe/Istanbul",
+        "Africa/Cairo",
+        "Africa/Johannesburg",
+        "Asia/Dubai",
+        "Asia/Tokyo",
+        "Asia/Shanghai",
+        "Asia/Kolkata",
+        "Asia/Singapore",
+        "Australia/Sydney",
+        "Pacific/Auckland",
+        "Etc/UTC",
+        "Etc/GMT",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+/// True for `auto` or a zone that exists under `/usr/share/zoneinfo`.
+pub fn is_valid_timezone(name: &str) -> bool {
+    let t = name.trim();
+    if t.is_empty() || t.contains("..") || t.starts_with('/') || t.contains('\0') {
+        return false;
+    }
+    if t.eq_ignore_ascii_case("auto") {
+        return true;
+    }
+    let path = std::path::Path::new("/usr/share/zoneinfo").join(t);
+    if path.is_file() {
+        return true;
+    }
+    // Some installs only ship a subset; allow known fallback names too.
+    fallback_timezone_list().iter().any(|z| z == t)
 }
 
 /// Lightweight validation of config.toml text (parse + known field checks).
@@ -405,8 +615,58 @@ pub fn validate_config_text(text: &str) -> Result<(), Vec<String>> {
             &mut errors,
             "display.vga",
             display.get("vga"),
-            &["cirrus", "std", "VGA", "virtio-gpu-pci"],
+            &["VGA", "cirrus", "std", "virtio-gpu-pci"],
         );
+        check_one_of(
+            &mut errors,
+            "display.passthrough",
+            display.get("passthrough"),
+            &["both", "glide", "mesa", "none"],
+        );
+        let wants_3dfx = display
+            .get("passthrough")
+            .and_then(|v| v.as_str())
+            .is_some_and(|p| matches!(p, "glide" | "mesa" | "both"));
+        if wants_3dfx {
+            // Match agent: missing backend defaults to sdl; only reject explicit non-sdl.
+            if display
+                .get("backend")
+                .and_then(|v| v.as_str())
+                .is_some_and(|b| b != "sdl")
+            {
+                errors.push(
+                    "display.backend must be \"sdl\" when display.passthrough enables 3dfx"
+                        .into(),
+                );
+            }
+            // Agent defaults machine to q35 when omitted — that fails 3dfx.
+            // Require an explicit pc (missing counts as wrong).
+            let machine = table
+                .get("vm")
+                .and_then(|v| v.as_table())
+                .and_then(|vm| vm.get("machine"))
+                .and_then(|v| v.as_str());
+            if machine != Some("pc") {
+                errors.push(
+                    "display.passthrough 3dfx modes require vm.machine = \"pc\" \
+                     (set explicitly; default q35 is not valid for 3dfx)"
+                        .into(),
+                );
+            }
+            let arch = table
+                .get("vm")
+                .and_then(|v| v.as_table())
+                .and_then(|vm| vm.get("arch"))
+                .and_then(|v| v.as_str());
+            // arch is required in full configs; if present it must be x86_64.
+            if let Some(a) = arch {
+                if a != "x86_64" {
+                    errors.push(
+                        "display.passthrough 3dfx modes require vm.arch = \"x86_64\"".into(),
+                    );
+                }
+            }
+        }
     }
     if let Some(sound) = table.get("sound").and_then(|v| v.as_table()) {
         check_one_of(
@@ -414,6 +674,22 @@ pub fn validate_config_text(text: &str) -> Result<(), Vec<String>> {
             "sound.backend",
             sound.get("backend"),
             &["alsa", "pipewire"],
+        );
+    }
+    if let Some(system) = table.get("system").and_then(|v| v.as_table()) {
+        if let Some(tz) = system.get("timezone").and_then(|v| v.as_str()) {
+            if !is_valid_timezone(tz) {
+                errors.push(format!(
+                    "system.timezone must be \"auto\" or a valid Linux IANA zone \
+                     (see /usr/share/zoneinfo); got {tz:?}"
+                ));
+            }
+        }
+        check_one_of(
+            &mut errors,
+            "system.rtc_base",
+            system.get("rtc_base"),
+            &["localtime", "utc"],
         );
     }
 
@@ -488,5 +764,92 @@ mod tests {
         let s = suggestions(&ctx);
         assert!(s.iter().any(|x| x.label == "x86_64"));
         assert!(s.iter().any(|x| x.label == "aarch64"));
+    }
+
+    #[test]
+    fn timezone_accepts_jerusalem_and_auto() {
+        assert!(is_valid_timezone("auto"));
+        assert!(is_valid_timezone("Asia/Jerusalem") || is_valid_timezone("America/Chicago"));
+        assert!(is_valid_timezone("UTC") || is_valid_timezone("America/Chicago"));
+        assert!(!is_valid_timezone("../etc/passwd"));
+        assert!(!is_valid_timezone("/etc/localtime"));
+    }
+
+    #[test]
+    fn completes_timezone_jerusalem_not_legacy_israel_alias() {
+        let text = "[system]\ntimezone = \"Jer";
+        let ctx = completion_context(text, text.len());
+        let s = suggestions(&ctx);
+        assert!(
+            s.iter().any(|x| x.label == "Asia/Jerusalem"),
+            "expected Asia/Jerusalem, got: {:?}",
+            s.iter().map(|x| &x.label).collect::<Vec<_>>()
+        );
+        assert!(
+            !s.iter().any(|x| x.label == "Israel"),
+            "legacy Israel alias must not appear when Jerusalem is listed"
+        );
+        let text_auto = "[system]\ntimezone = \"au";
+        let ctx = completion_context(text_auto, text_auto.len());
+        let s = suggestions(&ctx);
+        assert!(s.iter().any(|x| x.label == "auto"));
+    }
+
+    #[test]
+    fn empty_timezone_prefix_lists_texas_first_after_auto() {
+        let text = "[system]\ntimezone = \"";
+        let ctx = completion_context(text, text.len());
+        let s = suggestions(&ctx);
+        assert!(!s.is_empty());
+        assert_eq!(s[0].label, "auto");
+        // First concrete zone should be Texas Central.
+        let first_zone = s.iter().find(|x| x.label != "auto").map(|x| x.label.as_str());
+        assert_eq!(first_zone, Some("America/Chicago"));
+        assert!(!s.iter().any(|x| x.label == "Israel"));
+    }
+
+    #[test]
+    fn list_system_timezones_is_nonempty() {
+        let zones = list_system_timezones();
+        assert!(!zones.is_empty());
+        assert!(
+            zones
+                .iter()
+                .any(|z| z == "Asia/Jerusalem" || z == "America/Chicago" || z == "UTC"),
+            "zones sample: {:?}",
+            &zones[..zones.len().min(20)]
+        );
+    }
+
+    #[test]
+    fn threedfx_requires_explicit_pc_machine() {
+        let missing_machine = r#"
+version = 1
+[vm]
+arch = "x86_64"
+[vm.disk]
+path = "image.qcow2"
+[display]
+passthrough = "both"
+backend = "sdl"
+"#;
+        let err = validate_config_text(missing_machine).unwrap_err();
+        assert!(
+            err.iter().any(|e| e.contains("vm.machine")),
+            "expected machine error, got {err:?}"
+        );
+
+        let ok = r#"
+version = 1
+[vm]
+arch = "x86_64"
+machine = "pc"
+[vm.disk]
+path = "image.qcow2"
+[display]
+passthrough = "both"
+backend = "sdl"
+"#;
+        validate_config_text(ok).expect("pc + both should validate");
     }
 }

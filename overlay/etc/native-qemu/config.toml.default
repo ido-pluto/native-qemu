@@ -1,6 +1,11 @@
-# native-qemu default config (ReactOS / Windows 98 SE class guests).
+# native-qemu default: Windows 98 SE first (ReactOS works with the same profile).
+# Tuned for qemu-3dfx Glide/MESA performance on machine=pc.
 # Disk file is always image.qcow2 on the USB data volume — replace the file
 # to change the guest without editing this path.
+#
+# Guest needs (Win98 SE): BOXV9x (std VGA), AC97 WDM audio, Realtek 8139 NIC
+# drivers as applicable; Glide/OpenGL wrappers from qemu-3dfx inside the guest.
+# ReactOS ships usable drivers for this device set out of the box.
 
 version = 1
 
@@ -8,8 +13,11 @@ version = 1
 arch     = "x86_64"
 firmware = "bios"
 machine  = "pc"
+# 512M: solid for Win98 SE games; stay ≤1G without Win9x RAM patches.
 memory   = "512M"
-cpu      = "pentium3"
+# host + KVM = best 3dfx throughput (wiki recipe). Agent falls back under TCG.
+cpu      = "host"
+# Win9x is effectively uniprocessor; multi-vCPU can break timers/stability.
 vcpus    = 1
 sockets  = 1
 cores    = 1
@@ -19,22 +27,30 @@ threads  = 1
 format  = "qcow2"
 storage = 0
 path    = "image.qcow2"
+# IDE: zero-config for Win98 + ReactOS images. (SCSI/LSI is faster for
+# install-from-CD with extra drivers — change bus if your image expects it.)
 bus     = "ide"
 cache   = "writeback"
 discard = "ignore"
 
 [network]
 mode  = "user"
+# rtl8139: better practical default than pcnet for Win98 + ReactOS (Realtek
+# drivers, ReactOS inbox). NIC model does not affect 3dfx FPS.
 model = "rtl8139"
 
 [sound]
 enabled = true
 backend = "alsa"
-model   = "sb16"
+# AC97: best Win98 path with WDM drivers (wiki); ReactOS supports AC97.
+model   = "AC97"
 
 [display]
 backend = "sdl"
-vga     = "cirrus"
+# std VGA + BOXV9x is the qemu-3dfx Win98 2D path; 3D is glidept/mesapt.
+vga     = "VGA"
+# Glide + MESA host GL (auto-mapped on pc; needs /usr/local/bin QEMU, gl=off).
+passthrough = "both"
 
 [usb]
 default = "passthrough"
@@ -60,3 +76,8 @@ enabled = false
 
 [system]
 hostname = "native-qemu"
+# Host timezone before QEMU starts (guest RTC uses base=localtime).
+# auto = detect host zone, else America/Chicago (Texas Central).
+# Any Linux IANA zone is valid: America/Chicago (Texas), Asia/Jerusalem, UTC, …
+timezone = "auto"
+rtc_base = "localtime"

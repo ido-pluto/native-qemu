@@ -24,7 +24,7 @@ fi
 
 # Place direct root-level config.toml copies in the appliance image so operators
 # can edit this file on writable boot media before first run.
-# Prefer assets/default/config.toml (ReactOS / Win98 SE legacy PC profile) when
+# Prefer assets/default/config.toml (Win98 SE first / ReactOS, 3dfx-tuned) when
 # present; fall back to the documented example otherwise.
 # A duplicate uppercase 8.3-style name is intentionally included because older
 # legacy media readers may fold filenames to case-insensitive/short-name style.

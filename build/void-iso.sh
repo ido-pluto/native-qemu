@@ -199,6 +199,7 @@ PKGS=(
 	libslirp
 	bash
 	less
+	tzdata
 )
 
 INSTALL_PKGS=()

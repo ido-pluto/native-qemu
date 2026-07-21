@@ -174,6 +174,16 @@ pub struct DisplayConfig {
     /// Config values: VGA | cirrus | std | virtio | virtio-gpu-pci
     #[serde(default = "default_display_vga")]
     pub vga: String,
+    /// qemu-3dfx Glide/MESA host pass-through (patched QEMU only).
+    /// `none` | `glide` | `mesa` | `both`. Non-`none` requires SDL with
+    /// `gl=off` (not `gl=on`) and the appliance binary under `/usr/local/bin`.
+    /// Devices are auto-mapped by qemu-3dfx on the `pc` machine — the agent
+    /// does not pass `-device glidept` / `mesapt`.
+    ///
+    /// Host-side, `glide` / `mesa` / `both` are currently equivalent (same
+    /// QEMU flags); guest wrappers select Glide vs OpenGL. Prefer `both`.
+    #[serde(default = "default_display_passthrough")]
+    pub passthrough: String,
 }
 fn default_display_backend() -> String {
     "sdl".into()
@@ -181,12 +191,23 @@ fn default_display_backend() -> String {
 fn default_display_vga() -> String {
     "VGA".into()
 }
+fn default_display_passthrough() -> String {
+    "none".into()
+}
 impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
             backend: default_display_backend(),
             vga: default_display_vga(),
+            passthrough: default_display_passthrough(),
         }
+    }
+}
+
+impl DisplayConfig {
+    /// True when Glide and/or MESA 3dfx pass-through is requested.
+    pub fn wants_3dfx(&self) -> bool {
+        matches!(self.passthrough.as_str(), "glide" | "mesa" | "both")
     }
 }
 
@@ -426,20 +447,44 @@ fn default_vm_interface() -> String {
     "br0".into()
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize)]
 pub struct SystemConfig {
-    // These are reserved for the docs/network phase.  They remain accepted
-    // so a complete config can be used now without rejecting later fields.
     #[allow(dead_code)]
     #[serde(default)]
     pub hostname: Option<String>,
-    #[allow(dead_code)]
-    #[serde(default)]
-    pub timezone: Option<String>,
+    /// Host IANA timezone applied before QEMU starts (guest uses
+    /// `-rtc base=localtime`).
+    ///
+    /// - `"auto"` (default): detect host zone from `/etc/timezone` /
+    ///   `/etc/localtime` / `TZ`; if none, **America/Chicago** (Texas Central).
+    /// - any valid Linux IANA zone under `/usr/share/zoneinfo` (e.g.
+    ///   `America/Chicago`, `Asia/Jerusalem`, UTC).
+    #[serde(default = "default_timezone")]
+    pub timezone: String,
+    /// QEMU RTC base: `localtime` (Win9x/ReactOS) or `utc`.
+    #[serde(default = "default_rtc_base")]
+    pub rtc_base: String,
     #[serde(default)]
     pub ssh_enabled: bool,
     #[serde(default)]
     pub ssh_authorized_key: Option<String>,
+}
+fn default_timezone() -> String {
+    "auto".into()
+}
+fn default_rtc_base() -> String {
+    "localtime".into()
+}
+impl Default for SystemConfig {
+    fn default() -> Self {
+        Self {
+            hostname: None,
+            timezone: default_timezone(),
+            rtc_base: default_rtc_base(),
+            ssh_enabled: false,
+            ssh_authorized_key: None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -568,6 +613,32 @@ pub fn validate(config: &Config) -> Result<(), String> {
         &["VGA", "cirrus", "std", "virtio", "virtio-gpu-pci"],
     )?;
     one_of(
+        "display.passthrough",
+        &config.display.passthrough,
+        &["none", "glide", "mesa", "both"],
+    )?;
+    if config.display.wants_3dfx() {
+        if config.display.backend != "sdl" {
+            return Err(
+                "display.backend must be \"sdl\" when display.passthrough enables 3dfx \
+                 (glide/mesa/both); qemu-3dfx conflicts with headless display"
+                    .into(),
+            );
+        }
+        if config.vm.arch != "x86_64" {
+            return Err(
+                "display.passthrough 3dfx modes require vm.arch = \"x86_64\"".into(),
+            );
+        }
+        if config.vm.machine != "pc" {
+            return Err(
+                "display.passthrough 3dfx modes require vm.machine = \"pc\" \
+                 (qemu-3dfx glidept/mesapt auto-map on i440fx)"
+                    .into(),
+            );
+        }
+    }
+    one_of(
         "usb.default",
         &config.usb.default,
         &["passthrough", "host-only"],
@@ -636,6 +707,14 @@ pub fn validate(config: &Config) -> Result<(), String> {
     if !config.logging.max_size.is_empty() {
         positive_size("logging.max_size", &config.logging.max_size)?;
     }
+    one_of(
+        "system.rtc_base",
+        &config.system.rtc_base,
+        &["localtime", "utc"],
+    )?;
+    nonempty("system.timezone", &config.system.timezone)?;
+    // Path-safety + zone existence (when tzdata/zoneinfo is installed).
+    crate::timezone::validate_configured(&config.system.timezone)?;
     Ok(())
 }
 
@@ -716,19 +795,76 @@ mod tests {
     }
 
     #[test]
-    fn reactos_default_config_matches_the_current_schema() {
+    fn win98_default_config_matches_the_current_schema() {
         let config: Config = toml::from_str(include_str!("../../assets/default/config.toml"))
             .expect("assets/default/config.toml must parse");
         validate(&config).expect("assets/default/config.toml must be valid");
         assert_eq!(config.vm.machine, "pc");
-        assert_eq!(config.vm.cpu, "pentium3");
+        assert_eq!(config.vm.cpu, "host");
         assert_eq!(config.vm.memory, "512M");
+        assert_eq!(config.vm.vcpus, 1);
         assert_eq!(config.vm.sockets, 1);
         assert_eq!(config.vm.cores, 1);
         assert_eq!(config.vm.threads, 1);
         assert_eq!(config.network.model, "rtl8139");
-        assert_eq!(config.display.vga, "cirrus");
-        assert_eq!(config.sound.model, "sb16");
+        assert_eq!(config.display.vga, "VGA");
+        assert_eq!(config.display.passthrough, "both");
+        assert!(config.display.wants_3dfx());
+        assert_eq!(config.sound.model, "AC97");
+        assert_eq!(config.vm.disk.bus, "ide");
+        assert_eq!(config.system.timezone, "auto");
+        assert_eq!(config.system.rtc_base, "localtime");
+    }
+
+    #[test]
+    fn rejects_3dfx_passthrough_without_pc_sdl() {
+        let bad_backend = include_str!("../../assets/default/config.toml")
+            .replace("backend = \"sdl\"", "backend = \"none\"");
+        let config: Config = toml::from_str(&bad_backend).unwrap();
+        assert!(
+            config.display.backend == "none",
+            "test replace must hit display.backend"
+        );
+        assert!(validate(&config)
+            .unwrap_err()
+            .contains("display.backend must be \"sdl\""));
+
+        let bad_machine = include_str!("../../assets/default/config.toml")
+            .replace("machine  = \"pc\"", "machine  = \"q35\"");
+        let config: Config = toml::from_str(&bad_machine).unwrap();
+        assert!(validate(&config)
+            .unwrap_err()
+            .contains("vm.machine = \"pc\""));
+
+        let bad_mode = bundled_config().replace(
+            "passthrough = \"none\"",
+            "passthrough = \"not-a-mode\"",
+        );
+        let config: Config = toml::from_str(&bad_mode).unwrap();
+        assert!(validate(&config)
+            .unwrap_err()
+            .contains("display.passthrough"));
+    }
+
+    #[test]
+    fn rejects_invalid_or_unknown_timezone() {
+        let bad_path = include_str!("../../assets/default/config.toml")
+            .replace("timezone = \"auto\"", "timezone = \"../etc/passwd\"");
+        let config: Config = toml::from_str(&bad_path).unwrap();
+        assert!(validate(&config).unwrap_err().contains("timezone"));
+
+        // Only when zoneinfo is present on the test host.
+        if std::path::Path::new("/usr/share/zoneinfo").is_dir() {
+            let typo = include_str!("../../assets/default/config.toml").replace(
+                "timezone = \"auto\"",
+                "timezone = \"America/NotARealZone\"",
+            );
+            let config: Config = toml::from_str(&typo).unwrap();
+            assert!(
+                validate(&config).unwrap_err().contains("timezone"),
+                "unknown zone must fail when zoneinfo exists"
+            );
+        }
     }
 
     #[test]
@@ -762,8 +898,8 @@ mod tests {
         assert!(validate(&config).unwrap_err().contains("vm.machine"));
 
         let bad_vga = bundled_config().replace(
-            "vga     = \"VGA\"",
-            "vga     = \"not-a-vga\"",
+            "vga         = \"VGA\"",
+            "vga         = \"not-a-vga\"",
         );
         let config: Config = toml::from_str(&bad_vga).unwrap();
         assert!(validate(&config).unwrap_err().contains("display.vga"));

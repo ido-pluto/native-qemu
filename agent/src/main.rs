@@ -5,6 +5,7 @@ mod qemu;
 mod qmp;
 mod services;
 mod storage;
+mod timezone;
 mod usb;
 
 use signal_hook::consts::{SIGINT, SIGTERM};
@@ -112,6 +113,27 @@ fn main() {
     if let Err(error) = config::validate(&cfg) {
         drop_to_shell(&format!("invalid config.toml: {error}"));
         return;
+    }
+
+    // Host zone first: QEMU uses -rtc base=localtime so the guest CMOS tracks
+    // host local time. system.timezone=auto → detect, else Texas Central.
+    // Explicit zones hard-fail (already validated when zoneinfo exists); auto
+    // soft-fails so a missing tzdata package does not brick the appliance.
+    match timezone::resolve_and_apply(&cfg.system.timezone) {
+        Ok(tz) => println!("native-qemu: host timezone = {tz}"),
+        Err(e) if timezone::is_auto(&cfg.system.timezone) => {
+            eprintln!(
+                "native-qemu: warning: could not apply timezone auto ({e}); \
+                 continuing with current host clock"
+            );
+        }
+        Err(e) => {
+            drop_to_shell(&format!(
+                "could not apply system.timezone={:?}: {e}",
+                cfg.system.timezone
+            ));
+            return;
+        }
     }
 
     let log_path = logging::init(&cfg.logging);

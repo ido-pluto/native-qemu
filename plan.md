@@ -93,7 +93,8 @@ backend = "pipewire"              # pipewire | alsa
 model   = "virtio-sound"
 
 [display]
-backend = "sdl"                    # sdl = direct guest output on host KMS/DRM | none = headless
+backend     = "sdl"                # sdl = direct guest output on host KMS/DRM | none = headless
+# passthrough = "both"             # none|glide|mesa|both — qemu-3dfx on machine=pc (Win98 default)
 
 [usb]
 default = "passthrough"           # passthrough | host-only — policy for devices NOT listed below
@@ -179,7 +180,8 @@ lan_iface = "eth0"                # physical host NIC used for shares with scope
 
 [system]
 hostname           = "native-qemu"
-timezone           = "UTC"
+timezone           = "auto"       # auto | America/Chicago (Texas) | IANA; applied on host before QEMU
+rtc_base           = "localtime"  # localtime (Win9x) | utc
 ssh_enabled        = true
 ssh_authorized_key = "ssh-ed25519 AAAA..."
 ```
