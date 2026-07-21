@@ -91,11 +91,17 @@ if [ "$FORCE_DOCKER" = 1 ] || [ "$is_void" = 0 ] || ! command -v xbps-install >/
 			-v "$(cd "$(dirname "$AGENT_BIN")" && pwd)/$(basename "$AGENT_BIN"):/agent/native-qemu-agent:ro" \
 			-w /repo \
 			"$DOCKER_IMAGE" \
-			bash /repo/build/void-iso.sh \
-				--qemu-tarball /qemu/qemu-3dfx-x86_64.tar.gz \
-				--agent-bin /agent/native-qemu-agent \
-				--outdir /repo/dist \
-				--work /repo/.cache/void-iso
+			/bin/sh -c '
+				set -eu
+				xbps-install -Syu xbps || true
+				xbps-install -Sy bash git curl tar xz rsync xorriso squashfs-tools \
+					liblz4 ca-certificates coreutils findutils grep sed gawk
+				exec bash /repo/build/void-iso.sh \
+					--qemu-tarball /qemu/qemu-3dfx-x86_64.tar.gz \
+					--agent-bin /agent/native-qemu-agent \
+					--outdir /repo/dist \
+					--work /repo/.cache/void-iso
+			'
 	fi
 fi
 

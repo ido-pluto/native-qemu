@@ -39,8 +39,8 @@ jobs:
             -e QEMU_VERSION -e QEMU_3DFX_REF \
             -v "$PWD":/repo -w /repo \
             "${{ env.VOID_IMAGE }}" \
-            bash -lc '
-              set -euo pipefail
+            /bin/sh -c '
+              set -eu
               xbps-install -Syu xbps || true
               xbps-install -Sy git curl tar xz rsync \
                 gcc make pkg-config python3 ninja \
@@ -48,7 +48,8 @@ jobs:
                 libslirp-devel dtc zlib-devel libzstd-devel \
                 bash flex bison ca-certificates
               chmod +x build/qemu-3dfx.sh
-              ./build/qemu-3dfx.sh --pack
+              # qemu-3dfx.sh is bash; install bash above then use it
+              bash ./build/qemu-3dfx.sh --pack
             '
           ls -lh dist/qemu-3dfx-x86_64.tar.gz
           tar tzf dist/qemu-3dfx-x86_64.tar.gz | grep 'bin/qemu-system-x86_64$'
