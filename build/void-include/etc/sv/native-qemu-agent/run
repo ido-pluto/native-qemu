@@ -1,0 +1,8 @@
+#!/bin/sh
+# runit service: start the appliance agent on the console.
+exec 2>&1
+export PATH="/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
+export HOME=/root
+# Prefer KMSDRM/SDL for guest display on bare metal.
+cd /root || cd /
+exec /usr/local/bin/native-qemu-agent

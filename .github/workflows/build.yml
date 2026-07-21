@@ -1,12 +1,9 @@
 name: Build ISOs
 
-# native-qemu product track (locked decisions):
-#   - Void Linux **glibc** appliance (x86_64 only) with CI-built QEMU 9.2 + qemu-3dfx
+# Product track:
+#   - QEMU 9.2 + qemu-3dfx built on Void glibc (matches appliance ABI)
+#   - Void Linux glibc x86_64 hybrid ISO with that QEMU baked into /usr/local
 #   - Multi-platform nq-disk host helpers + release zips
-#
-# Phase 0: build-qemu-3dfx produces a prefix tarball.
-# Phase 1: Void ISO replaces Alpine (void-iso.sh); until then x86_64 Alpine ISO
-#          remains so nq-disk packages still ship a bootable image.
 
 on:
   push:
@@ -16,50 +13,45 @@ on:
   workflow_dispatch:
 
 env:
-  ALPINE_VERSION: "3.20"
   QEMU_VERSION: "9.2.2"
-  # kjliew/qemu-3dfx pin (update deliberately with patch bumps)
   QEMU_3DFX_REF: "eefd567ddc7d718ab5848f9d04df0dfd40776cf1"
+  VOID_IMAGE: "ghcr.io/void-linux/void-glibc-full:latest"
 
 jobs:
-  # ---- QEMU 9.2 + 3dfx (glibc), x86_64 softmmu only ------------------------
+  # ---- QEMU 9.2 + 3dfx on Void glibc (ABI-compatible with the ISO) ----------
+  # Built via Docker (not job container) so actions/checkout can use Node on Ubuntu.
   build-qemu-3dfx:
-    name: QEMU 9.2 + 3dfx (x86_64)
+    name: QEMU 9.2 + 3dfx (Void glibc)
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Install build dependencies
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential git rsync curl ca-certificates \
-            ninja-build pkg-config python3 python3-venv python3-setuptools \
-            libglib2.0-dev libpixman-1-dev libsdl2-dev libepoxy-dev \
-            libslirp-dev libfdt-dev zlib1g-dev libzstd-dev \
-            flex bison
-
-      - name: Cache QEMU sources + build
-        uses: actions/cache@v5
-        with:
-          path: |
-            .cache/qemu-3dfx-build
-          key: qemu-3dfx-${{ env.QEMU_VERSION }}-${{ env.QEMU_3DFX_REF }}-${{ hashFiles('build/qemu-3dfx.sh') }}
-          restore-keys: |
-            qemu-3dfx-${{ env.QEMU_VERSION }}-${{ env.QEMU_3DFX_REF }}-
-            qemu-3dfx-${{ env.QEMU_VERSION }}-
-
-      - name: Build and pack qemu-3dfx
+      - name: Build and pack qemu-3dfx (Void container)
         env:
           QEMU_VERSION: ${{ env.QEMU_VERSION }}
           QEMU_3DFX_REF: ${{ env.QEMU_3DFX_REF }}
         run: |
           set -euo pipefail
-          chmod +x build/qemu-3dfx.sh
-          ./build/qemu-3dfx.sh --pack
+          docker pull "${{ env.VOID_IMAGE }}"
+          docker run --rm \
+            -e QEMU_VERSION -e QEMU_3DFX_REF \
+            -v "$PWD":/repo -w /repo \
+            "${{ env.VOID_IMAGE }}" \
+            bash -lc '
+              set -euo pipefail
+              xbps-install -Syu xbps || true
+              xbps-install -Sy git curl tar xz rsync \
+                gcc make pkg-config python3 ninja \
+                glib-devel pixman-devel SDL2-devel libepoxy-devel \
+                libslirp-devel dtc zlib-devel libzstd-devel \
+                bash flex bison ca-certificates
+              chmod +x build/qemu-3dfx.sh
+              ./build/qemu-3dfx.sh --pack
+            '
+          ls -lh dist/qemu-3dfx-x86_64.tar.gz
+          tar tzf dist/qemu-3dfx-x86_64.tar.gz | grep 'bin/qemu-system-x86_64$'
 
       - name: Upload qemu-3dfx tarball
         uses: actions/upload-artifact@v7
@@ -125,30 +117,49 @@ jobs:
           path: dist/nq-disk/${{ matrix.platform }}/*
           if-no-files-found: error
 
-  # Temporary: Alpine x86_64 ISO until Void glibc builder (void-iso.sh) is ready.
-  # Product target is Void + qemu-3dfx; aarch64 Alpine is no longer built.
+  # ---- Void glibc ISO with qemu-3dfx + agent baked in ------------------------
   build:
-    name: Build x86_64 ISO (Alpine interim)
+    name: Build x86_64 ISO (Void + 3dfx)
+    needs: [build-qemu-3dfx]
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           lfs: true
 
-      - name: Build ISO in Alpine container
-        env:
-          MATRIX_ARCH: x86_64
-          IMAGE_TAG: ${{ github.event_name == 'pull_request' && format('pr{0}', github.event.pull_request.number) || github.ref_name }}
-        run: |
-          mkdir -p dist
-          docker run --rm \
-            -e ALPINE_VERSION -e MATRIX_ARCH -e IMAGE_TAG -e GITHUB_REF_NAME \
-            -v "$PWD":/repo -w /repo \
-            "alpine:$ALPINE_VERSION" \
-            sh /repo/build/ci-build.sh
+      - name: Install Rust (glibc agent)
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Upload artifact
+      - name: Build native-qemu-agent
+        run: |
+          set -euo pipefail
+          cargo build -p native-qemu-agent --locked --release
+          test -x target/release/native-qemu-agent
+
+      - name: Download qemu-3dfx tarball
+        uses: actions/download-artifact@v8
+        with:
+          name: qemu-3dfx-x86_64
+          path: dist
+
+      - name: Build Void ISO (privileged Docker)
+        run: |
+          set -euo pipefail
+          chmod +x build/void-iso.sh build/void-postsetup.sh
+          chmod +x build/void-include/etc/sv/native-qemu-agent/run
+          chmod +x build/void-include/etc/sv/native-qemu-agent/finish
+          ls -lh dist/qemu-3dfx-x86_64.tar.gz
+          # void-iso.sh re-execs into Void full image with --privileged for mklive
+          sudo ./build/void-iso.sh \
+            --qemu-tarball dist/qemu-3dfx-x86_64.tar.gz \
+            --agent-bin target/release/native-qemu-agent \
+            --outdir dist
+          test -f dist/native-qemu-x86_64.iso
+          ls -lh dist/native-qemu-x86_64.iso
+
+      - name: Upload ISO
         uses: actions/upload-artifact@v7
         with:
           name: native-qemu-x86_64
@@ -191,7 +202,7 @@ jobs:
               chmod +x "$zipdir/nq-disk"
             fi
             cp "$iso_x64" "$zipdir/native-qemu-x86_64.iso"
-            # Ship custom QEMU next to the kit for testing / future Void bake-in.
+            # Also ship the tarball for developers rebuilding rootfs / debugging.
             cp "$qemu_tb" "$zipdir/qemu-3dfx-x86_64.tar.gz"
 
             cat > "$zipdir/README.txt" <<EOF
@@ -199,18 +210,15 @@ jobs:
           =====================================
 
           Contents
-            nq-disk[.exe]                 host helper (this platform)
-            native-qemu-x86_64.iso        boot ISO (interim Alpine; Void+3dfx next)
-            qemu-3dfx-x86_64.tar.gz       QEMU 9.2 + 3dfx/MESA (glibc), prefix tree
+            nq-disk[.exe]                 host helper (this platform) — needs sudo
+            native-qemu-x86_64.iso        Void glibc live ISO with QEMU 9.2+3dfx
+                                          baked in at /usr/local/bin/qemu-system-x86_64
+            qemu-3dfx-x86_64.tar.gz       same QEMU prefix (optional extract / rebuild)
 
           Quick start
-            1. sudo ./nq-disk   (macOS/Linux) or Run as administrator (Windows)
-            2. Flash ISO to USB, edit config, load image.qcow2, unmount, boot target.
-
-          QEMU 3dfx tarball
-            Extract on a glibc Linux host (or the future Void appliance rootfs):
-              tar -C /usr/local -xzf qemu-3dfx-x86_64.tar.gz --strip-components=2
-            Or inspect: tar tzf qemu-3dfx-x86_64.tar.gz | head
+            1. sudo ./nq-disk   (or Run as administrator on Windows)
+            2. Flash ISO → Edit config → Load image.qcow2 → Unmount
+            3. Boot the stick on an x86_64 PC (KVM). Agent runs on tty1.
 
           Project: https://github.com/${{ github.repository }}
           EOF
@@ -229,7 +237,6 @@ jobs:
           cp "$iso_x64" dist/release/native-qemu-x86_64.iso
           cp "$qemu_tb" dist/release/qemu-3dfx-x86_64.tar.gz
 
-          echo "---- dist/release ----"
           ls -lah dist/release/
 
       - name: Upload release package artifacts
@@ -271,7 +278,7 @@ jobs:
             | Linux ARM64 | `native-qemu-linux-aarch64.zip` |
             | Windows x86_64 | `native-qemu-windows-x86_64.zip` |
 
-            Each zip includes `nq-disk`, the x86_64 boot ISO, and **`qemu-3dfx-x86_64.tar.gz`**
-            (QEMU 9.2 + [qemu-3dfx](https://github.com/kjliew/qemu-3dfx) MESA/Glide pass-through, glibc).
-
-            Appliance base is migrating from Alpine → **Void Linux glibc** with this QEMU baked in.
+            Each zip includes:
+            - **`nq-disk`** (needs sudo / Administrator)
+            - **`native-qemu-x86_64.iso`** — **Void glibc** live appliance with **QEMU 9.2 + 3dfx/MESA** at `/usr/local/bin/qemu-system-x86_64`
+            - **`qemu-3dfx-x86_64.tar.gz`** — same QEMU prefix (devtools / rebuild)

@@ -31,9 +31,8 @@ window manager, no interactive host UI — a direct proxy between hardware and a
 
 | Decision | Choice | Why |
 |---|---|---|
-| Base distro (shipping interim) | **Alpine Linux x86_64** ISO via `mkimage` | Existing CI path; hybrid USB + agent. **aarch64 ISO dropped** from product CI. |
-| Base distro (target) | **Void Linux glibc x86_64** | Host for CI-built **QEMU 9.2 + [qemu-3dfx](https://github.com/kjliew/qemu-3dfx)** (MESA/Glide); Mesa + glibc match upstream 3dfx practice. Scaffold: `build/void-iso.sh`. |
-| Custom QEMU | **qemu-3dfx tarball** from CI (`build/qemu-3dfx.sh`) | Not Alpine modular packages; prefix under `/usr/local` when baked into Void. |
+| Base distro | **Void Linux glibc x86_64** live ISO (`build/void-iso.sh` + void-mklive) | glibc + Mesa for **QEMU 9.2 + [qemu-3dfx](https://github.com/kjliew/qemu-3dfx)**; hybrid USB. **aarch64 ISO out of product scope.** |
+| Custom QEMU | Built on Void in CI (`build/qemu-3dfx.sh`), **baked into ISO** at `/usr/local/bin/qemu-system-x86_64` | Not distro modular QEMU; tarball also attached for rebuilds. |
 | Host USB tool | **`nq-disk`** (multi-platform) | Flash ISO + GPT/ext4 data volume + config editor; **requires sudo**. |
 | USB passthrough mechanism | **QEMU `usb-host`** (libusb, by vendor:product ID) | Flexible, hot-pluggable, no IOMMU/VT-d requirement — unlike VFIO PCI passthrough of a whole controller, which is rigid and hardware-dependent. |
 | VM disk location | **Configurable**, selected by a numbered storage index in `config.toml` | `0` = boot USB, `1` = internal (first fixed) disk, `2..N` = external disks in stable order. Avoids hardcoding where images live. |

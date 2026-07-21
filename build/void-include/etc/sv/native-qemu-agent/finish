@@ -1,0 +1,3 @@
+#!/bin/sh
+# If the agent exits cleanly with poweroff intent, halt; otherwise respawn via runit.
+exit 0

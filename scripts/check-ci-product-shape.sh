@@ -22,6 +22,8 @@ need "$WF" 'qemu-3dfx-x86_64\.tar\.gz' 'CI uploads qemu-3dfx-x86_64.tar.gz'
 need "$WF" 'native-qemu-x86_64\.iso' 'CI packages native-qemu-x86_64.iso'
 need "$WF" 'nq-disk' 'CI builds nq-disk'
 need "$WF" 'QEMU_VERSION: "9\.2\.2"|QEMU_VERSION: .9\.2\.2' 'QEMU 9.2.2 pin'
+need "$WF" 'void-iso\.sh' 'CI builds Void ISO via void-iso.sh'
+need "$WF" 'void-glibc' 'CI uses Void glibc image/context'
 # aarch64 Alpine product ISO must not remain in matrix
 if grep -E 'arch: aarch64' "$WF" | grep -vq '^[[:space:]]*#'; then
 	# allow comments only
@@ -48,8 +50,21 @@ test -x "$ROOT/build/void-iso.sh" || {
 	echo "FAIL: build/void-iso.sh missing or not executable" >&2
 	fail=1
 }
+test -x "$ROOT/build/void-postsetup.sh" || {
+	echo "FAIL: build/void-postsetup.sh missing or not executable" >&2
+	fail=1
+}
+test -f "$ROOT/build/void-include/etc/sv/native-qemu-agent/run" || {
+	echo "FAIL: missing runit service for native-qemu-agent" >&2
+	fail=1
+}
+# void-iso must stage qemu into include and refuse missing binary
+need "$ROOT/build/void-iso.sh" 'qemu-system-x86_64' 'void-iso stages qemu-system-x86_64'
+need "$ROOT/build/void-iso.sh" 'tar -C "\$INCLUDE" -xzf' 'void-iso unpacks qemu tarball into include'
+need "$ROOT/build/void-postsetup.sh" 'qemu-system-x86_64' 'postsetup verifies baked-in qemu'
 bash -n "$ROOT/build/qemu-3dfx.sh"
 bash -n "$ROOT/build/void-iso.sh"
+bash -n "$ROOT/build/void-postsetup.sh"
 echo "ok: build scripts executable + bash -n"
 
 if [ "$fail" -ne 0 ]; then

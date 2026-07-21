@@ -35,6 +35,19 @@ done
 echo "qemu-3dfx: version=${QEMU_VERSION} ref=${QEMU_3DFX_REF} jobs=${JOBS}"
 echo "qemu-3dfx: work=${WORK} destdir=${DESTDIR}"
 
+# Optional: install deps when running on Void (CI container).
+if command -v xbps-install >/dev/null 2>&1; then
+	echo "qemu-3dfx: ensuring Void build dependencies"
+	xbps-install -Syu xbps || true
+	xbps-install -Sy git curl tar xz rsync \
+		gcc make pkg-config python3 ninja \
+		glib-devel pixman-devel SDL2-devel libepoxy-devel \
+		libslirp-devel dtc zlib-devel libzstd-devel \
+		bash flex bison 2>/dev/null \
+	|| xbps-install -Sy git curl tar xz rsync gcc make pkg-config python3 \
+		ninja bash flex bison glib-devel pixman-devel SDL2-devel libepoxy-devel
+fi
+
 mkdir -p "$WORK" "$DESTDIR" "${ROOT}/dist"
 cd "$WORK"
 

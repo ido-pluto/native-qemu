@@ -19,11 +19,11 @@ ReactOS / Windows 98 SE class guests by default).
 
 | Piece | What ships today |
 |---|---|
-| Boot ISO | **`native-qemu-x86_64.iso`** (interim **Alpine** image) |
+| Boot ISO | **`native-qemu-x86_64.iso`** — **Void Linux glibc** live image |
 | Host tool | **`nq-disk`** for macOS (Apple Silicon), Linux (x86_64 + aarch64), Windows |
-| Custom QEMU | **`qemu-3dfx-x86_64.tar.gz`** — QEMU **9.2.2** + [qemu-3dfx](https://github.com/kjliew/qemu-3dfx) (MESA GL / 3Dfx Glide), **glibc**, built in CI |
-| Target arch | **x86_64** appliance only (no aarch64 ISO in product CI) |
-| Next base OS | Migrating appliance rootfs to **Void Linux glibc** with this QEMU baked in (`build/void-iso.sh`) |
+| QEMU on the stick | **QEMU 9.2.2 + [qemu-3dfx](https://github.com/kjliew/qemu-3dfx)** installed at **`/usr/local/bin/qemu-system-x86_64`** inside the ISO |
+| Extra artifact | **`qemu-3dfx-x86_64.tar.gz`** — same prefix tree (devtools / rebuild) |
+| Target arch | **x86_64** only (no aarch64 appliance ISO) |
 
 Guest data always lives on the USB **ext4** volume: `config.toml` + `image.qcow2` (path fixed so you
 can swap guests without editing the config).
@@ -58,11 +58,15 @@ Download from the [Releases](../../releases) page or from a green **Build ISOs**
 # Host tool
 cargo build -p nq-disk --release
 
-# Interim Alpine x86_64 ISO (containerized mkimage)
-./scripts/build-native-qemu-iso.sh x86_64 dist
-
-# Custom QEMU 9.2 + 3dfx (glibc host; long build)
+# Custom QEMU 9.2 + 3dfx (prefer Void glibc host / container; long build)
 ./build/qemu-3dfx.sh --pack   # → dist/qemu-3dfx-x86_64.tar.gz
+
+# Void glibc ISO with that QEMU + agent baked in (Docker if not on Void)
+cargo build -p native-qemu-agent --release
+sudo ./build/void-iso.sh \
+  --qemu-tarball dist/qemu-3dfx-x86_64.tar.gz \
+  --agent-bin target/release/native-qemu-agent
+# → dist/native-qemu-x86_64.iso
 ```
 
 ## Writing the stick — use `nq-disk` (required: sudo / Administrator)
@@ -87,22 +91,17 @@ sudo scripts/write-usb.sh --yes-really-write native-qemu-x86_64.iso /dev/rdiskN 
 sudo scripts/write-usb.sh --yes-really-write native-qemu-x86_64.iso /dev/sdX      # Linux
 ```
 
-## QEMU 9.2 + 3dfx tarball
+## QEMU 9.2 + 3dfx (inside the ISO)
 
 CI builds QEMU from [download.qemu.org](https://download.qemu.org/) **9.2.2** plus
-[kjliew/qemu-3dfx](https://github.com/kjliew/qemu-3dfx) (`00-qemu92x-mesa-glide.patch`). Script:
-[`build/qemu-3dfx.sh`](build/qemu-3dfx.sh).
+[kjliew/qemu-3dfx](https://github.com/kjliew/qemu-3dfx) on **Void glibc**, then
+[`build/void-iso.sh`](build/void-iso.sh) installs it into the live root at
+**`/usr/local/bin/qemu-system-x86_64`**. That is the binary `native-qemu-agent` runs on the target PC.
 
 ```sh
-# Inspect
-tar tzf qemu-3dfx-x86_64.tar.gz | head
-# Install onto a glibc Linux root (e.g. future Void appliance)
-sudo tar -C / -xzf qemu-3dfx-x86_64.tar.gz
-# binary at /usr/local/bin/qemu-system-x86_64
+# Optional: inspect the same prefix as a tarball
+tar tzf qemu-3dfx-x86_64.tar.gz | grep qemu-system-x86_64
 ```
-
-The interim Alpine ISO still uses **distro QEMU**; baking this tarball into the live image is the
-Void migration step (`build/void-iso.sh` — scaffold until Phase 1 lands).
 
 Guest **Glide/OpenGL wrappers** (Windows DLLs from qemu-3dfx) are installed **inside the guest OS**,
 not by the host flash tool. See the upstream qemu-3dfx README.
@@ -133,8 +132,8 @@ cargo test -p native-qemu-agent --locked
 
 CI jobs (see `.github/workflows/build.yml`):
 
-- `QEMU 9.2 + 3dfx (x86_64)` — custom QEMU tarball  
-- `Build x86_64 ISO (Alpine interim)` — boot ISO  
+- `QEMU 9.2 + 3dfx (Void glibc)` — custom QEMU tarball  
+- `Build x86_64 ISO (Void + 3dfx)` — boot ISO with QEMU baked in  
 - `nq-disk (*)` — host helpers  
 - `Package release zips` — kits above  
 
