@@ -174,6 +174,7 @@ xbps-install -Sy git bash curl xz tar rsync \
 # glibc is default for x86_64 void (not -musl).
 # Core runtime for agent + host GL for 3dfx/MESA pass-through.
 # (Do not install distro qemu — we bake qemu-3dfx into /usr/local.)
+# Void package names: MesaLib (not Mesa), mesa-dri for drivers.
 PKGS=(
 	e2fsprogs
 	dosfstools
@@ -189,9 +190,9 @@ PKGS=(
 	alsa-utils
 	SDL2
 	libepoxy
-	Mesa
+	MesaLib
 	mesa-dri
-	glib
+	libglvnd
 	pixman
 	libzstd
 	zlib
@@ -202,17 +203,17 @@ PKGS=(
 
 INSTALL_PKGS=()
 for p in "${PKGS[@]}"; do
+	# -R searches remote repos; must use glibc current (not musl) for x86_64
 	if XBPS_ARCH="$ARCH" xbps-query -R -p pkgver "$p" >/dev/null 2>&1; then
 		INSTALL_PKGS+=("$p")
-	elif XBPS_ARCH="$ARCH" xbps-query -Rs "$p" 2>/dev/null | head -1 | grep -q .; then
-		INSTALL_PKGS+=("$p")
+		log "pkg ok: $p"
 	else
 		log "skip missing package: $p"
 	fi
 done
 # Absolute minimum if repo query was flaky
 if [ "${#INSTALL_PKGS[@]}" -lt 5 ]; then
-	INSTALL_PKGS=(e2fsprogs SDL2 Mesa libepoxy iproute2 usbutils bash dnsmasq)
+	INSTALL_PKGS=(e2fsprogs SDL2 libepoxy mesa-dri iproute2 usbutils bash dnsmasq)
 fi
 
 PKG_STR="${INSTALL_PKGS[*]}"
