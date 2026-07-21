@@ -74,7 +74,11 @@ echo "qemu-3dfx: applying hw overlays + patch"
 rsync -a "${WORK}/qemu-3dfx/qemu-0/hw/3dfx" ./hw/
 rsync -a "${WORK}/qemu-3dfx/qemu-1/hw/mesa" ./hw/
 patch -p0 -i "${WORK}/qemu-3dfx/00-qemu92x-mesa-glide.patch"
-bash "${WORK}/qemu-3dfx/scripts/sign_commit"
+# sign_commit stamps a version string via git; ignore ownership/safe.directory noise in Docker
+git config --global --add safe.directory "$ROOT" 2>/dev/null || true
+git config --global --add safe.directory "$WORK" 2>/dev/null || true
+git config --global --add safe.directory "$(pwd)" 2>/dev/null || true
+bash "${WORK}/qemu-3dfx/scripts/sign_commit" || echo "qemu-3dfx: sign_commit skipped (non-fatal)"
 
 BUILD="${WORK}/build-${QEMU_VERSION}"
 rm -rf "$BUILD"
