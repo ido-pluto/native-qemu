@@ -42,7 +42,7 @@ jobs:
             /bin/sh -c '
               set -eu
               xbps-install -Syu xbps || true
-              xbps-install -Sy git curl tar xz rsync \
+              xbps-install -Sy git curl tar xz rsync patch \
                 gcc make pkg-config python3 ninja \
                 glib-devel pixman-devel SDL2-devel libepoxy-devel \
                 libslirp-devel dtc zlib-devel libzstd-devel \

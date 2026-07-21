@@ -39,12 +39,12 @@ echo "qemu-3dfx: work=${WORK} destdir=${DESTDIR}"
 if command -v xbps-install >/dev/null 2>&1; then
 	echo "qemu-3dfx: ensuring Void build dependencies"
 	xbps-install -Syu xbps || true
-	xbps-install -Sy git curl tar xz rsync \
+	xbps-install -Sy git curl tar xz rsync patch \
 		gcc make pkg-config python3 ninja \
 		glib-devel pixman-devel SDL2-devel libepoxy-devel \
 		libslirp-devel dtc zlib-devel libzstd-devel \
 		bash flex bison 2>/dev/null \
-	|| xbps-install -Sy git curl tar xz rsync gcc make pkg-config python3 \
+	|| xbps-install -Sy git curl tar xz rsync patch gcc make pkg-config python3 \
 		ninja bash flex bison glib-devel pixman-devel SDL2-devel libepoxy-devel
 fi
 
