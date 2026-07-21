@@ -43,9 +43,12 @@ if command -v xbps-install >/dev/null 2>&1; then
 		gcc make pkg-config python3 python3-pip ninja \
 		glib-devel pixman-devel SDL2-devel libepoxy-devel \
 		libslirp-devel dtc zlib-devel libzstd-devel \
+		libX11-devel libXext-devel libXxf86vm-devel libXi-devel \
+		Mesa-devel \
 		bash flex bison 2>/dev/null \
 	|| xbps-install -Sy git curl tar xz rsync patch gcc make pkg-config python3 \
-		python3-pip ninja bash flex bison glib-devel pixman-devel SDL2-devel libepoxy-devel
+		python3-pip ninja bash flex bison glib-devel pixman-devel SDL2-devel \
+		libepoxy-devel libX11-devel libXext-devel libXxf86vm-devel Mesa-devel
 	# QEMU's mkvenv needs distlib (not always packaged on Void)
 	python3 -m pip install --break-system-packages -q distlib setuptools wheel 2>/dev/null \
 		|| pip3 install -q distlib setuptools wheel 2>/dev/null \

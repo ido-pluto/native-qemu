@@ -46,7 +46,8 @@ jobs:
                 gcc make pkg-config python3 python3-pip ninja \
                 glib-devel pixman-devel SDL2-devel libepoxy-devel \
                 libslirp-devel dtc zlib-devel libzstd-devel \
-                bash flex bison ca-certificates
+                libX11-devel libXext-devel libXxf86vm-devel libXi-devel \
+                Mesa-devel bash flex bison ca-certificates
               python3 -m pip install --break-system-packages -q distlib setuptools wheel \
                 || pip3 install -q distlib setuptools wheel
               chmod +x build/qemu-3dfx.sh
